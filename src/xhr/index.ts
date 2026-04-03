@@ -1,0 +1,1 @@
+export { xhrRequest } from './xhrRequest';
