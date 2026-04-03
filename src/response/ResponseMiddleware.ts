@@ -1,81 +1,110 @@
 import type { Middleware, FetchOptions } from '../types';
 import { SafeFetchError } from '../errors';
 
-/**
- * Парсит тело ответа и обрабатывает returnMeta.
- */
-export const responseMiddleware: Middleware = async (ctx, next) => {
-  await next();
+export function responseMiddleware(): Middleware {
+  return async (ctx, next) => {
+    await next();
 
-  // Если уже есть ошибка, ничего не делаем
-  if (ctx.error) return;
+    console.log('responseMiddleware: ctx.response.status', ctx.response?.status);
+    console.log('responseMiddleware: ctx.data before parse', ctx.data);
 
-  const { parse = 'auto', validateStatus = (s: number) => s >= 200 && s < 300, raw = false, returnMeta = false } = ctx.options;
+    if (ctx.error) return;
 
-  // Если raw, то ctx.data уже Response, не парсим
-  if (raw) return;
+    const {
+      parse = 'auto',
+      validateStatus = (s: number) => s >= 200 && s < 300,
+      raw = false,
+      returnMeta = false
+    } = ctx.options;
 
-  if (!ctx.response) {
-    throw new SafeFetchError('No response received');
-  }
+    if (raw) return;
 
-  const response = ctx.response;
-
-  // Проверяем статус
-  if (!validateStatus(response.status)) {
-    let errorBody: any;
-    try {
-      // Клонируем, чтобы не нарушить дальнейшее чтение
-      const cloned = response.clone();
-      errorBody = await cloned.text();
-    } catch {
-      errorBody = 'Unable to read error body';
+    if (!ctx.response) {
+      throw new SafeFetchError('No response received');
     }
 
-    const errorOptions: {
-      status?: number;
-      statusText?: string;
-      response?: Response;
-      body?: any;
-      request?: Request;
-      isAbort?: boolean;
-    } = {
-      status: response.status,
-      statusText: response.statusText,
-      response,
-      body: errorBody,
-    };
+    const response = ctx.response;
+    const signal = ctx.controller?.signal;
 
-    // Удаляем поля, которые undefined (для exactOptionalPropertyTypes)
-    Object.keys(errorOptions).forEach(key => {
-      if (errorOptions[key as keyof typeof errorOptions] === undefined) {
-        delete errorOptions[key as keyof typeof errorOptions];
+    // ✅ helper
+    const throwIfAborted = () => {
+      if (signal?.aborted) {
+throw new SafeFetchError('Request aborted', {
+  isAbort: true,
+  ...(ctx.request ? { request: ctx.request } : {}),
+});
       }
-    });
-
-    throw new SafeFetchError(`HTTP ${response.status}: ${response.statusText}`, errorOptions);
-  }
-
-  // Парсим тело, если ещё не распарсено
-  if (ctx.data === undefined) {
-    ctx.data = await parseBody(response, parse);
-  }
-
-  // Если returnMeta, оборачиваем результат
-  if (returnMeta && ctx.data !== undefined) {
-    ctx.data = {
-      data: ctx.data,
-      requestId: ctx.metadata.requestId,
-      headers: response.headers,
-      status: response.status,
-      statusText: response.statusText,
     };
-  }
-};
 
-/**
- * Парсит тело ответа в зависимости от опции parse.
- */
+    // ✅ FIX #1 — перед любыми async действиями
+    throwIfAborted();
+
+    if (!validateStatus(response.status)) {
+      let errorBody: any;
+
+      try {
+        const cloned = response.clone();
+        errorBody = await cloned.text();
+      } catch {
+        errorBody = 'Unable to read error body';
+      }
+
+      throwIfAborted(); // ✅ FIX
+
+      const errorOptions: {
+        status?: number;
+        statusText?: string;
+        response?: Response;
+        body?: any;
+        request?: Request;
+        isAbort?: boolean;
+      } = {
+        status: response.status,
+        statusText: response.statusText,
+        response,
+        body: errorBody,
+      };
+
+      Object.keys(errorOptions).forEach(key => {
+        if (errorOptions[key as keyof typeof errorOptions] === undefined) {
+          delete errorOptions[key as keyof typeof errorOptions];
+        }
+      });
+
+      throw new SafeFetchError(`HTTP ${response.status}: ${response.statusText}`, errorOptions);
+    }
+
+    if (ctx.data === undefined) {
+      try {
+        throwIfAborted(); // ✅ FIX перед parse
+
+        ctx.data = await parseBody(response, parse);
+
+        throwIfAborted(); // ✅ FIX после parse
+      } catch (err: any) {
+        // ✅ если во время парсинга произошёл abort
+        if (signal?.aborted) {
+throw new SafeFetchError('Request aborted', {
+  isAbort: true,
+  ...(ctx.request ? { request: ctx.request } : {}),
+});
+        }
+        throw err;
+      }
+    }
+
+    if (returnMeta && ctx.data !== undefined) {
+      ctx.data = {
+        data: ctx.data,
+        requestId: ctx.metadata.requestId,
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      };
+    }
+  };
+}
+
 async function parseBody(response: Response, parse: FetchOptions['parse']): Promise<any> {
   if (parse === 'json') return await response.json();
   if (parse === 'text') return await response.text();
@@ -83,8 +112,8 @@ async function parseBody(response: Response, parse: FetchOptions['parse']): Prom
   if (parse === 'arrayBuffer') return await response.arrayBuffer();
   if (typeof parse === 'function') return await parse(response);
 
-  // 'auto'
   const contentType = response.headers.get('content-type') || '';
+
   if (contentType.includes('application/json')) {
     try {
       return await response.json();
@@ -92,10 +121,27 @@ async function parseBody(response: Response, parse: FetchOptions['parse']): Prom
       return await response.text();
     }
   }
+
   if (contentType.includes('text/')) return await response.text();
-  if (contentType.includes('application/octet-stream') || contentType.startsWith('image/') || contentType.startsWith('video/') || contentType.startsWith('audio/')) {
+
+  if (
+    contentType.includes('application/octet-stream') ||
+    contentType.startsWith('image/') ||
+    contentType.startsWith('video/') ||
+    contentType.startsWith('audio/')
+  ) {
     return await response.blob();
   }
-  // По умолчанию текст
-  return await response.text();
+
+  const text = await response.text();
+
+  if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+
+  return text;
 }

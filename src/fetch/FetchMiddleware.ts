@@ -1,101 +1,195 @@
-import type { Middleware, FetchOptions } from '../types'; // <- добавить FetchOptions
+import type { Middleware, FetchOptions } from '../types';
 import { SafeFetchError } from '../errors';
-import { fetchAdapter } from '../utils/fetchAdapter';
 import { combineSignals } from '../utils/signals';
 import { xhrRequest } from '../xhr/xhrRequest';
+import { fetchAdapter } from '../utils/fetchAdapter';
 
-export const fetchMiddleware: Middleware = async (ctx, next) => {
-  if (ctx.response) {
-    await next();
-    return;
-  }
-
-  const { method, headers: initHeaders, raw, validateStatus, onUploadProgress, onDownloadProgress, signal: externalSignal } = ctx.options;
-  const requestId = ctx.metadata.requestId;
-  const useXHR = (!!onUploadProgress || !!onDownloadProgress) && typeof XMLHttpRequest !== 'undefined';
-
-  const headers = new Headers(initHeaders);
-  headers.set('X-Request-Id', requestId);
-
-  // Комбинируем сигналы
-  const finalSignal = combineSignals(externalSignal ?? undefined, ctx.controller.signal);
-  const cleanup = (finalSignal as any)?.cleanup;
-
-  // Формируем RequestInit без undefined полей
-  const requestInit: RequestInit = {
-    headers,
-  };
-  if (method !== undefined) {
-    requestInit.method = method;
-  }
-  if (ctx.options.body !== undefined) {
-    requestInit.body = ctx.options.body === null ? null : ctx.options.body;
-  }
-  if (finalSignal) {
-    requestInit.signal = finalSignal;
-  }
-
-  let request = new Request(ctx.url, requestInit);
-  ctx.request = request;
-
-  try {
-    let response: Response;
-    if (useXHR) {
-      const xhrOptions: {
-        url: string;
-        method: string;
-        options: FetchOptions;
-        requestId: string;
-        signal?: AbortSignal;
-        onDownloadProgress?: (progress: number) => void;
-        onUploadProgress?: (progress: number) => void;
-      } = {
-        url: ctx.url,
-        method: method!,
-        options: ctx.options,
-        requestId,
-      };
-      if (finalSignal) xhrOptions.signal = finalSignal;
-      if (onDownloadProgress) xhrOptions.onDownloadProgress = onDownloadProgress;
-      if (onUploadProgress) xhrOptions.onUploadProgress = onUploadProgress;
-
-      const xhrResult = await xhrRequest(xhrOptions);
-      response = new Response(xhrResult.data, {
-        status: xhrResult.status,
-        statusText: xhrResult.statusText,
-        headers: xhrResult.headers,
+export function fetchMiddleware(): Middleware {
+  return async (ctx, next) => {
+    console.log('🌐 fetchMiddleware: ENTER, has signal?', !!ctx.controller.signal);
+    if (ctx.controller.signal.aborted) {
+      throw new SafeFetchError('Request aborted', {
+        isAbort: true,
       });
-      ctx.data = xhrResult.data;
-      ctx.response = response;
-    } else {
-      response = await fetchAdapter(request);
-      ctx.response = response;
+    }
 
-      if (raw) {
-        ctx.data = response;
-        return;
-      }
+    if (ctx.response) {
+      console.log('🌐 fetchMiddleware: ctx.response exists, skipping fetch');
+      await next();
+      return;
+    }
 
-      const statusValid = validateStatus?.(response.status) ?? (response.status >= 200 && response.status < 300);
-      if (!statusValid) {
-        const cloned = response.clone();
-        const errorBody = await cloned.text();
-        throw new SafeFetchError(`HTTP ${response.status}: ${response.statusText}`, {
-          status: response.status,
-          statusText: response.statusText,
-          response,
-          body: errorBody,
+    const {
+      method,
+      headers: initHeaders,
+      raw,
+      validateStatus,
+      onUploadProgress,
+      onDownloadProgress,
+      signal: externalSignal,
+      credentials,
+      fetch: customFetch,
+    } = ctx.options;
+
+    const requestId = ctx.metadata.requestId;
+
+    const useXHR =
+      (!!onUploadProgress || !!onDownloadProgress) &&
+      typeof XMLHttpRequest !== 'undefined';
+
+    const headers = new Headers(initHeaders);
+    headers.set('X-Request-Id', requestId);
+
+    const finalSignal = combineSignals(externalSignal ?? undefined, ctx.controller.signal);
+    console.log('🌐 finalSignal exists?', !!finalSignal);
+
+    const cleanup = (finalSignal as any)?.cleanup;
+
+    const requestInit: RequestInit = { headers };
+    if (method !== undefined) requestInit.method = method;
+    if (ctx.options.body != null) requestInit.body = ctx.options.body;
+    if (finalSignal) requestInit.signal = finalSignal;
+    if (credentials !== undefined) requestInit.credentials = credentials;
+
+    const request = new Request(ctx.url, requestInit);
+    ctx.request = request;
+
+    // ✅ helper — единая проверка abort
+    const throwIfAborted = () => {
+      if (finalSignal?.aborted) {
+        throw new SafeFetchError('Request aborted', {
+          isAbort: true,
           request,
         });
       }
+    };
+
+    try {
+      let response: Response;
+
+      if (useXHR) {
+        const xhrOptions: {
+          url: string;
+          method: string;
+          options: FetchOptions;
+          requestId: string;
+          signal?: AbortSignal;
+          onDownloadProgress?: (progress: number) => void;
+          onUploadProgress?: (progress: number) => void;
+          credentials?: RequestCredentials;
+        } = {
+          url: ctx.url,
+          method: method!,
+          options: ctx.options,
+          requestId,
+        };
+
+        if (finalSignal) xhrOptions.signal = finalSignal;
+        if (onDownloadProgress) xhrOptions.onDownloadProgress = onDownloadProgress;
+        if (onUploadProgress) xhrOptions.onUploadProgress = onUploadProgress;
+        if (credentials !== undefined) xhrOptions.credentials = credentials;
+
+        const xhrResult = await xhrRequest(xhrOptions);
+
+        throwIfAborted(); // ✅ FIX
+
+        response = new Response(xhrResult.data, {
+          status: xhrResult.status,
+          statusText: xhrResult.statusText,
+          headers: xhrResult.headers,
+        });
+
+        ctx.data = xhrResult.data;
+        ctx.response = response;
+
+        const isValid = validateStatus?.(response.status) ?? (response.status >= 200 && response.status < 300);
+        if (!isValid) {
+          const errorBody = typeof xhrResult.data === 'string'
+            ? xhrResult.data
+            : JSON.stringify(xhrResult.data);
+
+          throw new SafeFetchError(`HTTP ${response.status}: ${response.statusText}`, {
+            status: response.status,
+            statusText: response.statusText,
+            response,
+            body: errorBody,
+            request,
+            isRetryable: response.status >= 500,
+          });
+        }
+
+        await next();
+
+        throwIfAborted(); // ✅ FIX
+
+        return;
+      } else {
+        const fetcher = customFetch ?? fetchAdapter;
+
+        console.log('🌐 calling fetcher with signal:', !!requestInit.signal);
+
+        if (finalSignal?.aborted) {
+          throw new SafeFetchError('Request aborted', {
+            isAbort: true,
+            ...(ctx.request ? { request: ctx.request } : {}),
+          });
+        }
+
+        response = await fetcher(ctx.url, requestInit);
+
+        throwIfAborted(); // ✅ FIX (после fetch)
+
+        ctx.response = response;
+
+        if (raw) {
+          ctx.data = response;
+          await next();
+
+          throwIfAborted(); // ✅ FIX
+
+          return;
+        }
+
+        const statusValid =
+          validateStatus?.(response.status) ??
+          (response.status >= 200 && response.status < 300);
+
+        if (!statusValid) {
+          const cloned = response.clone();
+          const errorBody = await cloned.text();
+
+          throw new SafeFetchError(`HTTP ${response.status}: ${response.statusText}`, {
+            status: response.status,
+            statusText: response.statusText,
+            response,
+            body: errorBody,
+            request,
+            isRetryable: response.status >= 500,
+          });
+        }
+
+        await next();
+
+        throwIfAborted(); // ✅ FIX (после next)
+
+        return;
+      }
+    } catch (err) {
+      if (err instanceof SafeFetchError) throw err;
+
+      const error = err as any;
+
+      // ✅ ЧИСТОЕ определение abort (без магии)
+      const isAbort =
+        error?.name === 'AbortError' ||
+        (typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'AbortError');
+
+      throw new SafeFetchError(error?.message || 'Fetch error', {
+        isAbort,
+        request,
+      });
+    } finally {
+      cleanup?.();
     }
-  } catch (err) {
-    if (err instanceof SafeFetchError) throw err;
-    const error = err as Error;
-    const isAbort = error.name === 'AbortError' || error.message === 'Request timeout';
-    throw new SafeFetchError(error.message, { isAbort, request });
-  } finally {
-    cleanup?.();
-  }
-  await next();
-};
+  };
+}

@@ -1,5 +1,13 @@
 import type { SafeFetchInstance, FetchOptions, RequestMethod } from '../types';
 
+function normalizePath(baseUrl: string, path: string): string {
+  // Удаляем завершающий слеш у baseUrl, если он есть
+  const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+  // Удаляем начальный слеш у path, если он есть
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return base + p;
+}
+
 /**
  * Создаёт прокси-клиент, который позволяет вызывать методы API в стиле:
  * client.users.get('/123')
@@ -9,18 +17,16 @@ import type { SafeFetchInstance, FetchOptions, RequestMethod } from '../types';
  * @param instance - экземпляр safeFetch
  * @param baseUrl - базовый URL для всех запросов (опционально)
  */
+
 export function createClient<T extends Record<string, any>>(
   instance: SafeFetchInstance,
   baseUrl?: string
 ): T {
   const methods: RequestMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
-  const buildPath = (path: string): string => {
+  const buildPath = (path: string) => {
     if (!baseUrl) return path;
-    // Убираем дублирующиеся слеши
-    const normalizedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-    return `${normalizedBase}${normalizedPath}`;
+    return normalizePath(baseUrl, path);
   };
 
   const client: any = {};

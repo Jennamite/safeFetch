@@ -13,22 +13,18 @@ import { responseMiddleware } from '../response/ResponseMiddleware';
 import { telemetryMiddleware } from '../telemetry/TelemetryMiddleware';
 import { pollingMiddleware } from '../polling/PollingMiddleware';
 
-/**
- * Возвращает массив middleware, используемых по умолчанию.
- * Порядок важен!
- */
 export function defaultMiddleware(instance: SafeFetch): Middleware[] {
   return [
-    retryMiddleware(),
-    timeoutMiddleware,
+    // retryMiddleware() - УДАЛИТЬ
+    timeoutMiddleware(),
     concurrencyMiddleware(instance.concurrencyController),
-    queryMiddleware,
-    bodyMiddleware,
+    queryMiddleware(),
+    bodyMiddleware(),
     dedupeMiddleware(instance.dedupeManager),
     batchMiddleware(instance.batchProcessor, instance),
     cacheMiddleware(instance.cache, instance),
-    fetchMiddleware,
-    responseMiddleware,
+    fetchMiddleware(),
+    responseMiddleware(),
     telemetryMiddleware(instance.telemetry),
     mutationInvalidationMiddleware(instance.cache),
     pollingMiddleware(instance),

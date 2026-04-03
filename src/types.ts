@@ -8,6 +8,11 @@ export type RequestMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
  * Расширяет стандартный RequestInit, добавляя специфичные для библиотеки поля.
  */
 export interface FetchOptions extends Omit<RequestInit, 'cache'> {
+  /**
+   * Кастомная реализация fetch.
+   * По умолчанию используется глобальный fetch или node-fetch.
+   */
+  fetch?: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
   /** Базовый URL, будет объединён с переданным url */
   baseUrl?: string;
   /** Таймаут запроса в миллисекундах */
@@ -142,6 +147,7 @@ export interface SafeFetchInstance {
   raw: (url: string, options?: Omit<FetchOptions, 'raw'>) => Promise<Response>;
 
   use: (...middlewares: Middleware[]) => SafeFetchInstance;
+  prepend: (...middlewares: Middleware[]) => SafeFetchInstance;
   plugin: <T>(plugin: Plugin<T>, options?: T) => SafeFetchInstance;
   setDefaults: (defaults: Partial<FetchOptions>) => SafeFetchInstance;
 
@@ -149,7 +155,10 @@ export interface SafeFetchInstance {
   onResponse: (hook: OnResponseHook) => () => void;
   onError: (hook: OnErrorHook) => () => void;
 
-  invalidate: (pattern?: string | RegExp | ((key: string) => boolean), options?: { tags?: string[]; method?: string }) => void;
+  // invalidate: (pattern?: string | RegExp | ((key: string) => boolean), options?: { tags?: string[]; method?: string }) => void;
+  invalidate(): void;
+  invalidate(pattern: string | RegExp | ((key: string) => boolean), options?: { tags?: string[]; method?: string }): void;
+  invalidate(options: { tags?: string[]; method?: string }): void;
   revalidate: (pattern?: string | RegExp | ((key: string) => boolean), options?: { tags?: string[]; method?: string }) => Promise<void>;
 
   onCacheEvent: (event: 'invalidate' | 'set' | 'delete', listener: (key: string, entry?: any) => void) => () => void;

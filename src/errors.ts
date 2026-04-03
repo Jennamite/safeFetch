@@ -1,7 +1,3 @@
-/**
- * Специализированная ошибка для safeFetch.
- * Содержит дополнительную информацию о запросе/ответе.
- */
 export class SafeFetchError extends Error {
   public readonly status?: number;
   public readonly statusText?: string;
@@ -9,6 +5,7 @@ export class SafeFetchError extends Error {
   public readonly body?: any;
   public readonly request?: Request;
   public readonly isAbort?: boolean;
+  public readonly isRetryable?: boolean; // новое поле
 
   constructor(
     message: string,
@@ -19,6 +16,7 @@ export class SafeFetchError extends Error {
       body?: any;
       request?: Request;
       isAbort?: boolean;
+      isRetryable?: boolean;
     } = {}
   ) {
     super(message);
@@ -29,5 +27,6 @@ export class SafeFetchError extends Error {
     if (options.body !== undefined) this.body = options.body;
     if (options.request !== undefined) this.request = options.request;
     if (options.isAbort !== undefined) this.isAbort = options.isAbort;
+    if (options.isRetryable !== undefined) this.isRetryable = options.isRetryable;
   }
 }

@@ -12,6 +12,7 @@ interface BatchRequest {
 
 export class BatchProcessor {
   private pending = new Map<string, BatchRequest[]>();
+  private flushing = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private maxWaitMs: number;
 
@@ -20,6 +21,16 @@ export class BatchProcessor {
   }
 
   async add(key: string, ctx: RequestContext, instance: SafeFetch): Promise<any> {
+    if (this.flushing.has(key)) {
+      return new Promise((resolve, reject) => {
+        const list = this.pending.get(key) || [];
+        const item: BatchRequest = { ctx, resolve, reject };
+        // ... обработка отмены (как в существующем коде)
+        list.push(item);
+        this.pending.set(key, list);
+        // таймер не запускаем, так как flush уже выполняется
+      });
+    }
     return new Promise((resolve, reject) => {
       const list = this.pending.get(key) || [];
       const item: BatchRequest = { ctx, resolve, reject };
@@ -62,7 +73,7 @@ export class BatchProcessor {
     for (const [key, requests] of batches) {
       if (requests.length === 0) continue;
 
-      const first = requests[0]!; // после проверки длины first точно существует
+      const first = requests[0]!;
       const { url, options } = first.ctx;
       const { batchKey, batchMaxWaitMs, ...batchOptions } = options;
 
@@ -78,7 +89,7 @@ export class BatchProcessor {
       const mergedBatchOptions: FetchOptions = {
         ...batchOptions,
         method: 'POST',
-        body: JSON.stringify(batchBody), // сериализуем в JSON
+        body: JSON.stringify(batchBody),
         batch: false,
         context: {
           ...batchOptions.context,
@@ -88,12 +99,25 @@ export class BatchProcessor {
 
       try {
         const response = await instance.request(url, mergedBatchOptions);
+        console.log('Batch response type:', typeof response);
+        console.log('Batch response value:', response);
+
+        let parsedResponse = response;
+        if (typeof parsedResponse === 'string') {
+          console.log('Response is string, attempting JSON.parse');
+          try {
+            parsedResponse = JSON.parse(parsedResponse);
+          } catch (e) {
+            console.log('JSON.parse failed');
+          }
+        }
+        console.log('parsedResponse:', parsedResponse);
 
         let dataArray: any[];
-        if (Array.isArray(response)) {
-          dataArray = response;
-        } else if (response && typeof response === 'object' && Array.isArray((response as any).data)) {
-          dataArray = (response as any).data;
+        if (Array.isArray(parsedResponse)) {
+          dataArray = parsedResponse;
+        } else if (parsedResponse && typeof parsedResponse === 'object' && Array.isArray((parsedResponse as any).data)) {
+          dataArray = (parsedResponse as any).data;
         } else {
           throw new SafeFetchError('Batch response must be an array or contain "data" array');
         }
@@ -119,6 +143,12 @@ export class BatchProcessor {
           req.reject(err);
         }
       }
+    }
+
+    // Если во время отправки батчей появились новые запросы (например, добавленные через add),
+    // планируем следующий flush, чтобы они не потерялись
+    if (this.pending.size > 0) {
+      this.scheduleFlush(instance);
     }
   }
 

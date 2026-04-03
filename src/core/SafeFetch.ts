@@ -19,18 +19,21 @@ import { BatchProcessor } from '../batch/BatchProcessor';
 import { Telemetry } from '../telemetry/Telemetry';
 import { HooksManager } from '../hooks/HooksManager';
 import { defaultMiddleware } from './defaultMiddleware';
+import { mergeHeaders } from '../utils/helpers';
+import { isSafeMethod } from '../utils/helpers';
 
 export class SafeFetch {
   private pipeline: Pipeline;
-  private defaults: Partial<FetchOptions>;
   private hooksManager: HooksManager;
   private _instance: SafeFetchInstance;
 
+  public defaults: Partial<FetchOptions>;
   public cache: MemoryCache;
   public dedupeManager: DedupeManager;
   public concurrencyController: ConcurrencyController;
   public batchProcessor: BatchProcessor;
   public telemetry: Telemetry;
+  public readonly refreshPending = new Map<string, Promise<any>>();
 
   constructor(defaults: Partial<FetchOptions> = {}) {
     this.defaults = { ...defaults };
@@ -72,7 +75,31 @@ export class SafeFetch {
     this._instance = fetcher as SafeFetchInstance;
   }
 
-  async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | FetchResult<T>> {
+async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | FetchResult<T>> {
+  if (!options.method) options.method = 'GET';
+  const retries = options.retry ?? 0;
+  const retryDelay = options.retryDelay ?? 0;
+  let attempt = 0;
+
+  const getDelay = (attempt: number): number => {
+    if (typeof retryDelay === 'function') return retryDelay(attempt);
+    if (typeof retryDelay === 'number') {
+      // экспоненциальная задержка + джиттер
+      return retryDelay * Math.pow(2, attempt - 1) + Math.random() * 50;
+    }
+    return 0;
+  };
+
+  const isRetryable = (err: SafeFetchError): boolean => {
+    // повторяем только для безопасных методов (GET/HEAD)
+    if (!isSafeMethod(options.method)) return false;
+    // если ошибка помечена как retryable или статус 5xx
+    return err.isRetryable ?? (err.status !== undefined && err.status >= 500);
+  };
+
+  while (true) {
+    console.log('request options:', options);
+    // создаём новый контекст и выполняем pipeline
     const mergedOptions = this.mergeOptions(this.defaults, options);
     const ctx = new RequestContextImpl(url, mergedOptions);
 
@@ -81,11 +108,15 @@ export class SafeFetch {
       if (ctx.error) throw ctx.error;
       return ctx.data as T;
     } catch (err) {
-      if (err instanceof SafeFetchError) throw err;
-      throw new SafeFetchError((err as Error).message);
+      if (!(err instanceof SafeFetchError)) throw err;
+      if (!isRetryable(err) || attempt >= retries) throw err;
+      attempt++;
+      const delay = getDelay(attempt);
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+      // продолжаем цикл – новая попытка с новым контекстом
     }
   }
-
+}
   use(...middlewares: Middleware[]): SafeFetchInstance {
     this.pipeline.use(...middlewares);
     return this._instance;
@@ -101,13 +132,16 @@ export class SafeFetch {
     return this._instance;
   }
 
-  setDefaults(defaults: Partial<FetchOptions>): SafeFetchInstance {
-    this.defaults = { ...this.defaults, ...defaults };
-    if (defaults.maxCacheSize !== undefined) {
-      this.cache.setMaxSize(defaults.maxCacheSize);
-    }
-    return this._instance;
-  }
+  // setDefaults(defaults: Partial<FetchOptions>): SafeFetchInstance {
+  //   Object.assign(this.defaults, defaults);
+  //   if (defaults.maxCacheSize !== undefined) {
+  //     this.cache.setMaxSize(defaults.maxCacheSize);
+  //   }
+  //   if (defaults.maxCacheSize !== undefined) {
+  //     this.cache.setMaxSize(defaults.maxCacheSize);
+  //   }
+  //   return this._instance;
+  // }
 
   get = <T>(url: string, options?: Omit<FetchOptions, 'method' | 'body'>) =>
     this.request<T>(url, { ...options, method: 'GET' });
@@ -131,8 +165,24 @@ export class SafeFetch {
   onResponse = (hook: OnResponseHook) => this.hooksManager.addResponseHook(hook);
   onError = (hook: OnErrorHook) => this.hooksManager.addErrorHook(hook);
 
-  invalidate = (pattern?: string | RegExp | ((key: string) => boolean), options?: { tags?: string[]; method?: string }) => {
-    const { tags, method } = options || {};
+  invalidate(
+    patternOrOptions?: string | RegExp | ((key: string) => boolean) | { tags?: string[]; method?: string },
+    options?: { tags?: string[]; method?: string }
+  ): void {
+    let pattern: string | RegExp | ((key: string) => boolean) | undefined;
+    let opts: { tags?: string[]; method?: string } | undefined;
+
+    // Определяем, какой вариант вызова
+    if (typeof patternOrOptions === 'object' && !(patternOrOptions instanceof RegExp) && !(patternOrOptions instanceof Function)) {
+      // Вызвано как invalidate({ tags, method })
+      opts = patternOrOptions;
+    } else {
+      // Вызвано как invalidate(pattern, options) или invalidate()
+      pattern = patternOrOptions as any;
+      opts = options;
+    }
+
+    const { tags, method } = opts || {};
     if (tags && tags.length) {
       this.cache.invalidateByTags(tags);
     } else if (pattern !== undefined) {
@@ -140,7 +190,7 @@ export class SafeFetch {
     } else {
       this.cache.clear();
     }
-  };
+  }
 
   revalidate = async (pattern?: string | RegExp | ((key: string) => boolean), options?: { tags?: string[]; method?: string }) => {
     const keysToRevalidate: string[] = [];
@@ -205,7 +255,7 @@ export class SafeFetch {
           }
         }
         if (typeof prop === 'string') {
-          return new Proxy(() => {}, {
+          return new Proxy(() => { }, {
             get: (_, subProp: string) => {
               return (path?: string, data?: any, opts?: FetchOptions) => {
                 const fullPath = `/${prop}${path ? `/${path}` : ''}`;
@@ -220,15 +270,41 @@ export class SafeFetch {
     return proxy as T;
   };
 
-  private mergeOptions(defaults: Partial<FetchOptions>, options: FetchOptions): FetchOptions {
-    const result: FetchOptions = { ...defaults, ...options };
-    if (defaults.headers || options.headers) {
-      const defaultHeaders = new Headers(defaults.headers);
-      const optsHeaders = new Headers(options.headers);
-      const mergedHeaders = new Headers(defaultHeaders);
-      optsHeaders.forEach((value, key) => mergedHeaders.set(key, value));
-      result.headers = mergedHeaders;
+  // private mergeOptions(defaults: Partial<FetchOptions>, options: FetchOptions): FetchOptions {
+  //   const result: FetchOptions = { ...defaults, ...options };
+  //   if (defaults.headers || options.headers) {
+  //     const defaultHeaders = new Headers(defaults.headers);
+  //     const optsHeaders = new Headers(options.headers);
+  //     const mergedHeaders = new Headers(defaultHeaders);
+  //     optsHeaders.forEach((value, key) => mergedHeaders.set(key, value));
+  //     result.headers = mergedHeaders;
+  //   }
+  //   return result;
+  // }
+
+  setDefaults(defaults: Partial<FetchOptions>): SafeFetchInstance {
+    // Глубокое слияние заголовков
+    const newDefaults = { ...this.defaults, ...defaults };
+    if (defaults.headers || this.defaults.headers) {
+      newDefaults.headers = mergeHeaders(this.defaults.headers, defaults.headers);
     }
+    this.defaults = newDefaults;
+
+    if (defaults.maxCacheSize !== undefined) {
+      this.cache.setMaxSize(defaults.maxCacheSize);
+    }
+    return this._instance;
+  }
+
+  private mergeOptions(defaults: Partial<FetchOptions>, options: FetchOptions): FetchOptions {
+    // Сначала поверхностное копирование
+    const result: FetchOptions = { ...defaults, ...options };
+
+    // Глубокое слияние заголовков
+    if (defaults.headers || options.headers) {
+      result.headers = mergeHeaders(defaults.headers, options.headers);
+    }
+
     return result;
   }
 }

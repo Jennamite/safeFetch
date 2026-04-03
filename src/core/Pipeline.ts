@@ -59,6 +59,7 @@ export class Pipeline {
             index++;
             const middleware = this.middlewares[index];
             if (middleware) {
+                console.log(`Pipeline: calling middleware #${index}`);
                 await middleware(ctx, next);
             }
         };

@@ -29,3 +29,42 @@ export function stableStringify(obj: any): string {
 export function isSafeMethod(method?: string): boolean {
   return method === 'GET' || method === 'HEAD';
 }
+
+export function filterUndefinedDeep<T>(obj: T): T {
+  if (Array.isArray(obj)) {
+    return obj
+      .map(filterUndefinedDeep)
+      .filter(item => item !== undefined) as any;
+  }
+
+  if (obj && typeof obj === 'object') {
+    const result: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value === undefined) continue;
+      const filtered = filterUndefinedDeep(value);
+      if (filtered !== undefined) {
+        result[key] = filtered;
+      }
+    }
+    return result;
+  }
+
+  return obj;
+}
+
+/**
+ * Глубокое слияние заголовков.
+ * @param target - целевой объект заголовков (будет изменён)
+ * @param source - источник заголовков
+ * @returns объединённый объект Headers
+ */
+export function mergeHeaders(target: HeadersInit | undefined, source: HeadersInit | undefined): Headers {
+  const result = new Headers(target);
+  if (source) {
+    const sourceHeaders = new Headers(source);
+    sourceHeaders.forEach((value, key) => {
+      result.set(key, value);
+    });
+  }
+  return result;
+}

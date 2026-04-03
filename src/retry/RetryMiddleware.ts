@@ -3,43 +3,44 @@ import { SafeFetchError } from '../errors';
 import { isSafeMethod } from '../utils/helpers';
 
 export function retryMiddleware(): Middleware {
+  console.log('🔁 retryMiddleware: factory called');
   return async (ctx, next) => {
-    const retry = ctx.options.retry ?? 0;
-    const retryDelay = ctx.options.retryDelay ?? ((attempt: number) => Math.min(1000 * Math.pow(2, attempt - 1), 30000));
-    const retryOn = ctx.options.retryOn ?? ((err: SafeFetchError) => {
-      if (err.isAbort) return false;
-      const status = err.status;
-      // Повторяем только для безопасных методов и при ошибках сервера (5xx) или отсутствии статуса
-      return isSafeMethod(ctx.options.method) && (!status || status >= 500);
-    });
-
+    console.log('🔁 retryMiddleware: start for', ctx.url, 'method:', ctx.options.method);
+    const retries = ctx.options.retry ?? 0;
+    const retryDelay = ctx.options.retryDelay ?? 0;
     let attempt = 0;
+    const getDelay = (attempt: number): number => {
+      if (typeof retryDelay === 'function') return retryDelay(attempt);
+      if (typeof retryDelay === 'number') return retryDelay * Math.pow(2, attempt - 1) + Math.random() * 50;
+      return 0;
+    };
     while (true) {
       try {
+        console.log(`🔁 attempt ${attempt}: calling next`);
         await next();
+        console.log(`🔁 attempt ${attempt}: next succeeded`);
         return;
       } catch (err) {
+        console.log(`🔁 attempt ${attempt}: caught error`, err);
         if (!(err instanceof SafeFetchError)) throw err;
-        if (attempt >= retry) throw err;
-        if (!retryOn(err)) throw err;
-
+        console.log(`🔁 err.status=${err.status}, err.isRetryable=${err.isRetryable}, method=${ctx.options.method}`);
+        const isRetryable = (err.isRetryable ?? (err.status !== undefined && err.status >= 500)) && isSafeMethod(ctx.options.method);
+        console.log(`🔁 isRetryable=${isRetryable}, attempt=${attempt}, retries=${retries}`);
+        if (!isRetryable || attempt >= retries) throw err;
         attempt++;
         ctx.metadata.retryCount = attempt;
-
-        // Если запрос уже отменён, не ждём
-        if (ctx.controller.signal.aborted) {
-          throw new SafeFetchError('Request cancelled', { isAbort: true });
+        const delay = getDelay(attempt);
+        if (delay > 0) {
+          console.log(`🔁 waiting ${delay}ms`);
+          await new Promise(resolve => setTimeout(resolve, delay));
         }
-
-        const delay = typeof retryDelay === 'function' ? retryDelay(attempt) : retryDelay;
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, delay);
-          const onAbort = () => {
-            clearTimeout(timer);
-            reject(new SafeFetchError('Retry cancelled', { isAbort: true }));
-          };
-          ctx.controller.signal.addEventListener('abort', onAbort, { once: true });
-        });
+        console.log(`🔁 resetting ctx.response, data, error`);
+        delete ctx.response;
+        delete ctx.data;
+        delete ctx.error;
+        console.log('🔁 after delete, ctx.response ===', ctx.response);
+        console.log('🔁 after delete, ctx.data ===', ctx.data);
+        console.log('🔁 after delete, ctx.error ===', ctx.error);
       }
     }
   };
