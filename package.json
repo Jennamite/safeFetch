@@ -1,9 +1,30 @@
 {
-  "dependencies": {
-    "msw": "^2.12.14"
+  "name": "safe-fetch",
+  "version": "1.0.0",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    }
   },
+  "dependencies": {
+  },
+  "files": ["dist"],
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "clean": "if exist dist rd /s /q dist",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build": "npm run clean && npm run build:esm && npm run build:cjs"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
