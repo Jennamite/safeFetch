@@ -125,39 +125,24 @@ export function fetchMiddleware(): Middleware {
         return;
       } else {
         const fetcher = customFetch ?? fetchAdapter;
-
-        console.log('🌐 calling fetcher with signal:', !!requestInit.signal);
-
-        if (finalSignal?.aborted) {
-          throw new SafeFetchError('Request aborted', {
-            isAbort: true,
-            ...(ctx.request ? { request: ctx.request } : {}),
-          });
-        }
-
         response = await fetcher(ctx.url, requestInit);
-
-        throwIfAborted(); // ✅ FIX (после fetch)
-
         ctx.response = response;
+
+        // ✅ Добавить проверку
+        if (!response) {
+          throw new SafeFetchError('Fetch returned undefined response', { request });
+        }
 
         if (raw) {
           ctx.data = response;
           await next();
-
-          throwIfAborted(); // ✅ FIX
-
           return;
         }
 
-        const statusValid =
-          validateStatus?.(response.status) ??
-          (response.status >= 200 && response.status < 300);
-
+        const statusValid = validateStatus?.(response.status) ?? (response.status >= 200 && response.status < 300);
         if (!statusValid) {
           const cloned = response.clone();
           const errorBody = await cloned.text();
-
           throw new SafeFetchError(`HTTP ${response.status}: ${response.statusText}`, {
             status: response.status,
             statusText: response.statusText,
@@ -169,9 +154,6 @@ export function fetchMiddleware(): Middleware {
         }
 
         await next();
-
-        throwIfAborted(); // ✅ FIX (после next)
-
         return;
       }
     } catch (err) {

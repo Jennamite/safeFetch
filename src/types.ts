@@ -12,7 +12,8 @@ export interface FetchOptions extends Omit<RequestInit, 'cache'> {
    * Кастомная реализация fetch.
    * По умолчанию используется глобальный fetch или node-fetch.
    */
-  fetch?: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  // fetch?: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   /** Базовый URL, будет объединён с переданным url */
   baseUrl?: string;
   /** Таймаут запроса в миллисекундах */
