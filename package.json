@@ -1,5 +1,5 @@
 {
-  "name": "safe-fetch",
+  "name": "@jennamite/safe-fetch",
   "version": "1.0.0",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
@@ -16,15 +16,20 @@
       }
     }
   },
-  "dependencies": {
-  },
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "vitest run",
     "clean": "if exist dist rd /s /q dist",
+    "build:js": "tsup",
     "build:esm": "tsc -p tsconfig.esm.json",
     "build:cjs": "tsc -p tsconfig.cjs.json",
-    "build": "npm run clean && npm run build:esm && npm run build:cjs"
+    "build:types": "tsc -p tsconfig.build.json",
+    "build": "npm run clean && npm run build:js && npm run build:types && npm run copy:types",
+    "copy:types": "xcopy /E /I dist\\types dist\\ dist/types/* dist/ && rm -rf dist/types"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
@@ -32,11 +37,20 @@
     "@vitest/browser": "^4.1.2",
     "jsdom": "^29.0.1",
     "node-fetch": "^3.3.2",
+    "tsup": "^8.5.1",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
   },
-  "keywords": ["fetch", "http", "client", "typescript", "caching", "batching", "retry"],
-  "author": "Jenamite",
+  "keywords": [
+    "fetch",
+    "http",
+    "client",
+    "typescript",
+    "caching",
+    "batching",
+    "retry"
+  ],
+  "author": "Jennamite",
   "license": "MIT",
   "peerDependencies": {
     "node-fetch": "^3.0.0"
