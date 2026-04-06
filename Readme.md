@@ -21,7 +21,7 @@
 * **Прогресс загрузки** (upload/download) через XHR
 * **Генерация REST‑клиента** (`createClient`)
 * **Плагины** для расширения функциональности
-* Полная поддержка **```typescript** со строгой типизацией
+* Полная поддержка **typescript** со строгой типизацией
 
 ## 📦 Установка
 
@@ -126,13 +126,13 @@ const [a, b] = await Promise.all([
 ## Батчинг POST‑запросов
 
 ```typescript
+// Сервер должен вернуть массив результатов в том же порядке
 const [r1, r2] = await Promise.all([
   api('/api/action', { method: 'POST', body: { id: 1 }, batch: true }),
   api('/api/action', { method: 'POST', body: { id: 2 }, batch: true })
 ]);
 ```
 
-// Сервер должен вернуть массив результатов в том же порядке
 
 ## Middleware
 
