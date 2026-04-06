@@ -26,11 +26,11 @@
 ## 📦 Установка
 
 ```bash
-npm install safe-fetch
+npm install @jennamite/safe-fetch
 # или
-yarn add safe-fetch
+yarn add @jennamite/safe-fetch
 # или
-pnpm add safe-fetch
+pnpm add @jennamite/safe-fetch
 ```
 
 ## Node.js
@@ -105,6 +105,7 @@ api.invalidate();
 ```
 
 ## Повторные попытки
+
 ```typescript
 await api('/unstable', {
   retry: 3,
@@ -132,7 +133,6 @@ const [r1, r2] = await Promise.all([
   api('/api/action', { method: 'POST', body: { id: 2 }, batch: true })
 ]);
 ```
-
 
 ## Middleware
 
@@ -276,7 +276,7 @@ api.onTelemetry((event) => {
 ### Примечания
 
 * При использовании `onUploadProgress` или `onDownloadProgress` запрос автоматически выполняется через `XMLHttpRequest` вместо `fetch`.
-* Для работы кэша и дедупликации по умолчанию учитываются заголовки `authorization`,   `accept-language`,   `x-api-key`. Это можно изменить глобально через `includeHeaders` при создании экземпляра.
+* Для работы кэша и дедупликации по умолчанию учитываются заголовки `authorization`,    `accept-language`,    `x-api-key`. Это можно изменить глобально через `includeHeaders` при создании экземпляра.
 * `staleWhileRevalidate` при включённом `cache: 'memory'` возвращает устаревшие данные и одновременно обновляет кэш в фоне.
 * Батчинг требует, чтобы сервер умел обрабатывать составные запросы и возвращал массив результатов в том же порядке, что и исходные запросы.
 
