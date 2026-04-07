@@ -1,6 +1,10 @@
 {
   "name": "@jennamite/safe-fetch",
   "version": "1.0.1",
+    "repository": {
+    "type": "git",
+    "url": "https://github.com/Jennamite/safeFetch"
+  },
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
   "types": "./dist/esm/index.d.ts",
