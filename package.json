@@ -3,7 +3,7 @@
   "version": "1.0.3",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Jennamite/safeFetch"
+    "url": "git+https://github.com/Jennamite/safeFetch.git"
   },
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
