@@ -1,7 +1,7 @@
 {
   "name": "@jennamite/safe-fetch",
   "version": "1.0.2",
-    "repository": {
+  "repository": {
     "type": "git",
     "url": "https://github.com/Jennamite/safeFetch"
   },
@@ -12,7 +12,7 @@
     ".": {
       "import": {
         "types": "./dist/esm/index.d.ts",
-        "default": "./dist/esm/index.js"
+        "default": "./dist/esm/index.mjs"
       },
       "require": {
         "types": "./dist/cjs/index.d.ts",
@@ -41,6 +41,7 @@
     "@vitest/browser": "^4.1.2",
     "jsdom": "^29.0.1",
     "node-fetch": "^3.3.2",
+    "shx": "^0.4.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
