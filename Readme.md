@@ -43,7 +43,7 @@ npm install node-fetch
 
 ```typescript
 import fetch from 'node-fetch';
-import { createSafeFetch } from 'safe-fetch';
+import { createSafeFetch } from '@jennamite/safe-fetch';
 
 const api = createSafeFetch({ fetch });
 ```
@@ -51,7 +51,7 @@ const api = createSafeFetch({ fetch });
 ## 🚀 Быстрый старт
 
 ```typescript
-import safeFetch from 'safe-fetch';
+import safeFetch from '@jennamite/safe-fetch';
 
 // GET
 const users = await safeFetch('/api/users');
@@ -73,7 +73,7 @@ const res = await safeFetch.raw('/api/file.pdf');
 Создайте собственный экземпляр с глобальными параметрами:
 
 ```typescript
-import { createSafeFetch } from 'safe-fetch';
+import { createSafeFetch } from '@jennamite/safe-fetch';
 
 const api = createSafeFetch({
   baseUrl: 'https://api.example.com',
@@ -201,7 +201,7 @@ await api('/upload', {
 ## Генерация REST‑клиента
 
 ```typescript
-import { createClient } from 'safe-fetch';
+import { createClient } from '@jennamite/safe-fetch';
 
 const client = createClient<{
   users: {
