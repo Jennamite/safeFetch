@@ -1,38 +1,32 @@
 {
   "name": "@jennamite/safe-fetch",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Jennamite/safeFetch.git"
   },
-  "main": "./dist/cjs/index.js",
-  "module": "./dist/esm/index.js",
-  "types": "./dist/esm/index.d.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "import": {
-        "types": "./dist/esm/index.d.ts",
-        "default": "./dist/esm/index.mjs"
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
       },
       "require": {
-        "types": "./dist/cjs/index.d.ts",
-        "default": "./dist/cjs/index.js"
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
       }
     }
   },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
+  "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
+    "dev": "tsup --watch",
     "test": "vitest run",
     "clean": "shx rm -rf dist",
-    "build:js": "tsup",
-    "build:types": "tsc -p tsconfig.build.json",
-    "build": "npm run clean && npm run build:js && npm run build:types && npm run copy:types",
-    "copy:types": "shx cp dist/index.d.ts dist/index.d.ts && shx rm -rf dist/types",
-    "dev": "tsup --watch"
+    "build": "npm run clean && tsup",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
