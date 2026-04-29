@@ -27,13 +27,12 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "clean": "if exist dist rd /s /q dist",
+    "clean": "shx rm -rf dist",
     "build:js": "tsup",
-    "build:esm": "tsc -p tsconfig.esm.json",
-    "build:cjs": "tsc -p tsconfig.cjs.json",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "npm run clean && npm run build:js && npm run build:types && npm run copy:types",
-    "copy:types": "xcopy /E /I dist\\types dist\\ dist/types/* dist/ && rm -rf dist/types"
+    "copy:types": "shx cp dist/index.d.ts dist/index.d.ts && shx rm -rf dist/types",
+    "dev": "tsup --watch"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

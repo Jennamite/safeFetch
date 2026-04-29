@@ -1,10 +1,10 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],   // только точка входа
+  entry: ['src/index.ts'],
   format: ['cjs', 'esm'],
-  dts: true,                 // генерирует index.d.ts
-  clean: true,
+  dts: false,           // ← не генерируем типы через tsup
+  clean: false,         // ← очистку делаем в скрипте
   outDir: 'dist',
   sourcemap: true,
   esbuildOptions(options) {
