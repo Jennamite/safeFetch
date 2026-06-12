@@ -142,8 +142,20 @@ export function fetchMiddleware(): Middleware {
         const statusValid = validateStatus?.(response.status) ?? (response.status >= 200 && response.status < 300);
         if (!statusValid) {
           const cloned = response.clone();
-          const errorBody = await cloned.text();
-          throw new SafeFetchError(`HTTP ${response.status}: ${response.statusText}`, {
+          let errorBody = await cloned.text();
+
+          // Пробуем извлечь сообщение из JSON
+          let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+          try {
+            const parsed = JSON.parse(errorBody);
+            errorMessage = parsed.message || parsed.error || errorBody;
+            // Можно сохранить распарсенный body для дальнейшего использования
+            errorBody = parsed;
+          } catch {
+            // errorBody не JSON, оставляем как есть
+          }
+
+          throw new SafeFetchError(errorMessage, {
             status: response.status,
             statusText: response.statusText,
             response,
