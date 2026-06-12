@@ -58,5 +58,8 @@
     "node-fetch": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "shx": "^0.4.0"
   }
 }
