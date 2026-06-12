@@ -169,20 +169,25 @@ export function fetchMiddleware(): Middleware {
         return;
       }
     } catch (err) {
-      if (err instanceof SafeFetchError) throw err;
+      // ИСПРАВЛЕНО: Проверяем тип ошибки не через капризный instanceof, 
+      // а по жесткому имени класса, которое мы зашили в конструкторе!
+      if (err && typeof err === 'object' && (err instanceof SafeFetchError || (err as any).name === 'SafeFetchError')) {
+        throw err;
+      }
 
       const error = err as any;
 
-      // ✅ ЧИСТОЕ определение abort (без магии)
       const isAbort =
         error?.name === 'AbortError' ||
         (typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'AbortError');
 
+      // Передаем оригинальное сообщение ошибки дальше, не затирая его
       throw new SafeFetchError(error?.message || 'Fetch error', {
         isAbort,
         request,
       });
-    } finally {
+    }
+    finally {
       cleanup?.();
     }
   };

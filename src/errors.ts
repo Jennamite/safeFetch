@@ -5,7 +5,7 @@ export class SafeFetchError extends Error {
   public readonly body?: any;
   public readonly request?: Request;
   public readonly isAbort?: boolean;
-  public readonly isRetryable?: boolean; // новое поле
+  public readonly isRetryable?: boolean;
 
   constructor(
     message: string,
@@ -20,7 +20,18 @@ export class SafeFetchError extends Error {
     } = {}
   ) {
     super(message);
+
+    Object.setPrototypeOf(this, SafeFetchError.prototype);
+
+    Object.defineProperty(this, 'message', {
+      configurable: true,
+      enumerable: true,
+      value: message,
+      writable: true
+    });
+
     this.name = 'SafeFetchError';
+
     if (options.status !== undefined) this.status = options.status;
     if (options.statusText !== undefined) this.statusText = options.statusText;
     if (options.response !== undefined) this.response = options.response;
