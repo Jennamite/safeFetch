@@ -7,7 +7,7 @@ export { SafeFetch, createSafeFetch } from './core/SafeFetch';
 
 // Экземпляр по умолчанию
 import { createSafeFetch } from './core/SafeFetch';
-import type { SafeFetchInstance, FetchOptions } from './types';
+import type { SafeFetchInstance } from './types';
 
 /**
  * Экземпляр safeFetch с настройками по умолчанию:
@@ -17,7 +17,6 @@ import type { SafeFetchInstance, FetchOptions } from './types';
  * - retryDelay: экспоненциальная задержка до 30 секунд
  * - validateStatus: статус 200-299
  * - parse: 'auto'
- * - cache: 'no-cache'
  * - dedupe: true
  * - maxCacheSize: 50
  */
@@ -25,12 +24,15 @@ export const safeFetch: SafeFetchInstance = createSafeFetch({
   credentials: 'same-origin',
   timeout: 10000,
   retry: 2,
+  // Экспоненциальная задержка до 30 секунд
   retryDelay: (attempt: number) => Math.min(1000 * Math.pow(2, attempt - 1), 30000),
-  validateStatus: (status) => status >= 200 && status < 300,
+  validateStatus: (status: number) => status >= 200 && status < 300,
   parse: 'auto',
-  cache: 'no-cache',
   dedupe: true,
   maxCacheSize: 50,
+  // 🔥 ИСПРАВЛЕНИЕ: Убрали явное свойство cache: 'no-cache', чтобы исключить 
+  // конфликты со строгим режимом exactOptionalPropertyTypes нативных типов RequestCache.
+  // По умолчанию CacheMiddleware сам отключит кэш, если не передан маркер 'memory'.
 });
 
 export default safeFetch;

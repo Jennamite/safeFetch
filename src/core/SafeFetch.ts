@@ -21,6 +21,7 @@ import { HooksManager } from '../hooks/HooksManager';
 import { defaultMiddleware } from './defaultMiddleware';
 import { mergeHeaders } from '../utils/helpers';
 import { isSafeMethod } from '../utils/helpers';
+import { parseCacheKey } from '../utils/keyBuilder';
 
 export class SafeFetch {
   private pipeline: Pipeline;
@@ -45,8 +46,8 @@ export class SafeFetch {
     this.hooksManager = new HooksManager();
 
     this.pipeline = new Pipeline();
-    this.pipeline.use(...defaultMiddleware(this));
     this.pipeline.use(...this.hooksManager.createMiddleware());
+    this.pipeline.use(...defaultMiddleware(this));
 
     // Создаём callable обёртку
     const fetcher = (url: string, options?: FetchOptions) => this.request(url, options);
@@ -75,48 +76,46 @@ export class SafeFetch {
     this._instance = fetcher as SafeFetchInstance;
   }
 
-async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | FetchResult<T>> {
-  if (!options.method) options.method = 'GET';
-  const retries = options.retry ?? 0;
-  const retryDelay = options.retryDelay ?? 0;
-  let attempt = 0;
+  async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | FetchResult<T>> {
+    if (!options.method) options.method = 'GET';
+    const retries = options.retry ?? 0;
+    const retryDelay = options.retryDelay ?? 0;
+    let attempt = 0;
 
-  const getDelay = (attempt: number): number => {
-    if (typeof retryDelay === 'function') return retryDelay(attempt);
-    if (typeof retryDelay === 'number') {
-      // экспоненциальная задержка + джиттер
-      return retryDelay * Math.pow(2, attempt - 1) + Math.random() * 50;
-    }
-    return 0;
-  };
+    const getDelay = (attempt: number): number => {
+      if (typeof retryDelay === 'function') return retryDelay(attempt);
+      if (typeof retryDelay === 'number') {
+        return retryDelay * Math.pow(2, attempt - 1) + Math.random() * 50;
+      }
+      return 0;
+    };
 
-  const isRetryable = (err: SafeFetchError): boolean => {
-    // повторяем только для безопасных методов (GET/HEAD)
-    if (!isSafeMethod(options.method)) return false;
-    // если ошибка помечена как retryable или статус 5xx
-    return err.isRetryable ?? (err.status !== undefined && err.status >= 500);
-  };
+    const isRetryable = (err: SafeFetchError): boolean => {
+      // 🔥 НОВОЕ: первым делом проверяем isAbort
+      if (err.isAbort) return false;  // ← ЭТО НОВАЯ СТРОКА
 
-  while (true) {
-    console.log('request options:', options);
-    // создаём новый контекст и выполняем pipeline
-    const mergedOptions = this.mergeOptions(this.defaults, options);
-    const ctx = new RequestContextImpl(url, mergedOptions);
+      if (!isSafeMethod(options.method)) return false;
+      return err.isRetryable ?? (err.status !== undefined && err.status >= 500);
+    };
 
-    try {
-      await this.pipeline.run(ctx);
-      if (ctx.error) throw ctx.error;
-      return ctx.data as T;
-    } catch (err) {
-      if (!(err instanceof SafeFetchError)) throw err;
-      if (!isRetryable(err) || attempt >= retries) throw err;
-      attempt++;
-      const delay = getDelay(attempt);
-      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
-      // продолжаем цикл – новая попытка с новым контекстом
+    while (true) {
+      const mergedOptions = this.mergeOptions(this.defaults, options);
+      const ctx = new RequestContextImpl(url, mergedOptions);
+
+      try {
+        await this.pipeline.run(ctx);
+        if (ctx.error) throw ctx.error;
+        return ctx.data as T;
+      } catch (err) {
+        if (!(err instanceof SafeFetchError)) throw err;
+        if (!isRetryable(err) || attempt >= retries) throw err;
+        attempt++;
+        const delay = getDelay(attempt);
+        if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+        // продолжаем цикл – новая попытка с новым контекстом
+      }
     }
   }
-}
   use(...middlewares: Middleware[]): SafeFetchInstance {
     this.pipeline.use(...middlewares);
     return this._instance;
@@ -131,17 +130,6 @@ async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | Fet
     plugin.setup(this._instance, options);
     return this._instance;
   }
-
-  // setDefaults(defaults: Partial<FetchOptions>): SafeFetchInstance {
-  //   Object.assign(this.defaults, defaults);
-  //   if (defaults.maxCacheSize !== undefined) {
-  //     this.cache.setMaxSize(defaults.maxCacheSize);
-  //   }
-  //   if (defaults.maxCacheSize !== undefined) {
-  //     this.cache.setMaxSize(defaults.maxCacheSize);
-  //   }
-  //   return this._instance;
-  // }
 
   get = <T>(url: string, options?: Omit<FetchOptions, 'method' | 'body'>) =>
     this.request<T>(url, { ...options, method: 'GET' });
@@ -172,12 +160,9 @@ async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | Fet
     let pattern: string | RegExp | ((key: string) => boolean) | undefined;
     let opts: { tags?: string[]; method?: string } | undefined;
 
-    // Определяем, какой вариант вызова
     if (typeof patternOrOptions === 'object' && !(patternOrOptions instanceof RegExp) && !(patternOrOptions instanceof Function)) {
-      // Вызвано как invalidate({ tags, method })
       opts = patternOrOptions;
     } else {
-      // Вызвано как invalidate(pattern, options) или invalidate()
       pattern = patternOrOptions as any;
       opts = options;
     }
@@ -186,7 +171,7 @@ async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | Fet
     if (tags && tags.length) {
       this.cache.invalidateByTags(tags);
     } else if (pattern !== undefined) {
-      this.cache.invalidateByPattern(pattern, method);
+      this.cache.invalidateByPattern(pattern, method); // Оставляем так, работает через MemoryCache!
     } else {
       this.cache.clear();
     }
@@ -206,7 +191,10 @@ async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | Fet
         if (typeof pattern === 'function') match = pattern(key);
         else if (pattern instanceof RegExp) match = pattern.test(key);
         else match = key.includes(pattern);
-        if (method && !key.startsWith(`${method.toUpperCase()}:`)) match = false;
+
+        // 🔥 ВОТ ЗДЕСЬ ИСПРАВЛЕНО: ищем по нулевому байту (\x00), а не по двоеточию!
+        if (method && !key.startsWith(`${method.toUpperCase()}\x00`)) match = false;
+
         if (match) keysToRevalidate.push(key);
       });
     } else {
@@ -214,20 +202,22 @@ async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | Fet
     }
 
     const promises = keysToRevalidate.map(async (key) => {
-      const parts = key.split(':', 2);
-      const method = parts[0];
-      const url = parts[1];
-      if (!url) return;
-      const originalUrl = url;
+      const entry = this.cache.getEntry(key);
+      if (!entry) return;
+
       this.cache.delete(key);
       try {
-        await this.request(originalUrl, { method: method as any, force: true });
+        await this.request(entry.originalUrl, {
+          ...entry.originalOptions,
+          force: true,
+        });
       } catch {
         // ignore
       }
     });
     await Promise.allSettled(promises);
   };
+
 
   onCacheEvent = (event: 'invalidate' | 'set' | 'delete', listener: (key: string, entry?: any) => void) =>
     this.cache.on(event, listener);
@@ -270,17 +260,6 @@ async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | Fet
     return proxy as T;
   };
 
-  // private mergeOptions(defaults: Partial<FetchOptions>, options: FetchOptions): FetchOptions {
-  //   const result: FetchOptions = { ...defaults, ...options };
-  //   if (defaults.headers || options.headers) {
-  //     const defaultHeaders = new Headers(defaults.headers);
-  //     const optsHeaders = new Headers(options.headers);
-  //     const mergedHeaders = new Headers(defaultHeaders);
-  //     optsHeaders.forEach((value, key) => mergedHeaders.set(key, value));
-  //     result.headers = mergedHeaders;
-  //   }
-  //   return result;
-  // }
 
   setDefaults(defaults: Partial<FetchOptions>): SafeFetchInstance {
     // Глубокое слияние заголовков
@@ -297,10 +276,13 @@ async request<T = any>(url: string, options: FetchOptions = {}): Promise<T | Fet
   }
 
   private mergeOptions(defaults: Partial<FetchOptions>, options: FetchOptions): FetchOptions {
-    // Сначала поверхностное копирование
     const result: FetchOptions = { ...defaults, ...options };
 
-    // Глубокое слияние заголовков
+    // 🔥 ДОБАВИТЬ ЭТУ СТРОКУ: Если передан маркер обхода полинга, вычищаем его из результата
+    if (options.pollInterval === undefined || (options as any)._skipGlobalPoll) {
+      delete result.pollInterval;
+    }
+
     if (defaults.headers || options.headers) {
       result.headers = mergeHeaders(defaults.headers, options.headers);
     }

@@ -9,13 +9,15 @@ export interface BuildKeyOptions {
   includeHeaders?: string[] | undefined;
 }
 
-const SEP = '\x00'; // безопасный разделитель
+// Используем единый безопасный разделитель для всей библиотеки
+export const CACHE_KEY_SEP = '\x00';
 
 function normalizeHeaders(headers?: HeadersInit): Record<string, string> {
   if (!headers) return {};
 
+  const obj: Record<string, string> = {};
+
   if (headers instanceof Headers) {
-    const obj: Record<string, string> = {};
     headers.forEach((value, key) => {
       obj[key.toLowerCase()] = value;
     });
@@ -23,17 +25,22 @@ function normalizeHeaders(headers?: HeadersInit): Record<string, string> {
   }
 
   if (Array.isArray(headers)) {
-    const obj: Record<string, string> = {};
     for (const [key, value] of headers) {
-      obj[key.toLowerCase()] = value;
+      if (key) {
+        obj[key.toLowerCase()] = value;
+      }
     }
     return obj;
   }
 
-  const obj: Record<string, string> = {};
-  for (const key in headers) {
-    obj[key.toLowerCase()] = String((headers as any)[key]);
+  // 🔥 ИСПРАВЛЕНИЕ: Безопасный перебор без зацепа свойств прототипа (for...in)
+  if (typeof headers === 'object' && headers !== null) {
+    const entries = Object.entries(headers);
+    for (const [key, value] of entries) {
+      obj[key.toLowerCase()] = String(value);
+    }
   }
+
   return obj;
 }
 
@@ -44,7 +51,9 @@ export function buildCacheKey(options: BuildKeyOptions): string {
     query,
     body,
     headers,
-    includeHeaders = ['authorization', 'accept-language', 'x-api-key'],
+    // Если заголовки фильтрации не переданы явно, по умолчанию не привязываемся к ним,
+    // чтобы избежать неожиданного расхождения ключей при изменении окружения
+    includeHeaders = [],
   } = options;
 
   const queryString = query ? stableStringify(filterUndefinedDeep(query)) : '';
@@ -61,7 +70,7 @@ export function buildCacheKey(options: BuildKeyOptions): string {
   }
 
   let headerString = '';
-  if (headers && includeHeaders?.length) {
+  if (headers && includeHeaders.length > 0) {
     const headerObj = normalizeHeaders(headers);
     const relevant: Record<string, string> = {};
 
@@ -81,11 +90,12 @@ export function buildCacheKey(options: BuildKeyOptions): string {
     queryString,
     bodyString,
     headerString,
-  ].join(SEP);
+  ].join(CACHE_KEY_SEP);
 }
 
 export function parseCacheKey(key: string): { method: string; url: string } {
-  const parts = key.split(SEP, 2);
+  // 🔥 ИСПРАВЛЕНИЕ: Используем экспортируемую константу CACHE_KEY_SEP
+  const parts = key.split(CACHE_KEY_SEP, 2);
   if (parts.length < 2) {
     throw new Error(`Invalid cache key: ${key}`);
   }

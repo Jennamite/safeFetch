@@ -247,4 +247,168 @@ describe('safeFetch', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
+
+  // ==========================================
+  // 🔥 ДОПОЛНИТЕЛЬНЫЕ ТЕСТЫ БАЗОВОГО ФУНКЦИОНАЛА
+  // ==========================================
+
+  describe('Базовый функционал и Оптимизация ядра', () => {
+
+    it('Должен возвращать метаданные при returnMeta = true', async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ id: 1 }), {
+        status: 200,
+        statusText: 'OK',
+        headers: { 'Content-Type': 'application/json' }
+      }));
+
+      const result: any = await sf('/posts/1', { returnMeta: true });
+
+      expect(result).toHaveProperty('data');
+      expect(result).toHaveProperty('status', 200);
+      expect(result).toHaveProperty('statusText', 'OK');
+      expect(result).toHaveProperty('headers');
+      expect(result).toHaveProperty('requestId');
+      expect(result.data).toHaveProperty('id', 1);
+    });
+
+    it('Должен успешно дедуплицировать параллельные GET-запросы', async () => {
+      sf.invalidate();
+
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ id: 2 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+
+      const [res1, res2, res3] = await Promise.all([
+        sf('/posts/2'),
+        sf('/posts/2'),
+        sf('/posts/2')
+      ]);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(res1).toHaveProperty('id', 2);
+      expect(res1).toEqual(res2);
+      expect(res2).toEqual(res3);
+    });
+
+    it('Должен корректно кэшировать запросы в памяти и инвалидировать их', async () => {
+      sf.invalidate();
+
+      mockFetch.mockImplementation(() => {
+        return Promise.resolve(new Response(JSON.stringify({ id: 3 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        }));
+      });
+
+      const first = await sf('/posts/3', { cache: 'memory', cacheTTL: 5000, tags: ['test-tag'] });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      const second = await sf('/posts/3', { cache: 'memory' });
+      expect(first).toEqual(second);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      sf.invalidate({ tags: ['test-tag'] });
+
+      await sf('/posts/3', { cache: 'memory' });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('Рекурсивный REST-клиент должен поддерживать глубокую вложенность эндпоинтов', async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ id: 4 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+
+      interface TargetSchema {
+        posts: {
+          get: (path?: string) => Promise<any>;
+        }
+      }
+
+      const client = sf.createClient<TargetSchema>();
+
+      const post = await client.posts.get('4');
+      expect(post).toHaveProperty('id', 4);
+
+      // 🔥 ИСПРАВЛЕНИЕ: Заменили 'https://example.com' на реальный ожидаемый URL 'https://api.example.com/posts/4'
+      expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/posts/4', expect.any(Object));
+    });
+
+    it('Должен пропускать запросы через цепочку кастомных Onion-middleware', async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true })));
+
+      const trackingApi = createSafeFetch({ baseUrl: 'https://api.example.com' });
+      const executionOrder: string[] = [];
+
+      trackingApi.use(async (ctx, next) => {
+        executionOrder.push('mw1-before');
+        await next();
+        executionOrder.push('mw1-after');
+      });
+
+      trackingApi.prepend(async (ctx, next) => {
+        executionOrder.push('mw2-before');
+        await next();
+        executionOrder.push('mw2-after');
+      });
+
+      await trackingApi('/posts/5');
+
+      expect(executionOrder).toEqual([
+        'mw2-before',
+        'mw1-before',
+        'mw1-after',
+        'mw2-after'
+      ]);
+    });
+
+    it('Должен корректно отрабатывать хуки onRequest, onResponse и onError', async () => {
+      const hookApi = createSafeFetch({ baseUrl: 'https://example.com' });
+      let requestTriggered = false;
+      let responseTriggered = false;
+      let errorTriggered = false;
+
+      hookApi.onRequest(() => { requestTriggered = true; });
+      hookApi.onResponse(() => { responseTriggered = true; });
+      hookApi.onError(() => { errorTriggered = true; });
+
+      // 1. Успешный сценарий
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      await hookApi('/posts/1');
+      expect(requestTriggered).toBe(true);
+      expect(responseTriggered).toBe(true);
+
+      // 2. Сценарий ошибки
+      mockFetch.mockRejectedValueOnce(new Error('Network Error'));
+
+      try {
+        await hookApi('/error-route');
+      } catch {
+        // Игнорируем ошибку, проверяем триггер хука
+      }
+
+      expect(errorTriggered).toBe(true);
+    });
+
+
+    it('Должен отправлять корректные события в модуль телеметрии', async () => {
+      const telemetryApi = createSafeFetch({ baseUrl: 'https://example.com' });
+      const events: string[] = [];
+
+      telemetryApi.onTelemetry((event) => {
+        events.push(event.type);
+      });
+
+      // Имитируем успешный ответ
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      await telemetryApi('/telemetry-success');
+
+      // Даем макротаску setTimeout(..., 0) внутри Telemetry.emit выполниться
+      await new Promise(resolve => setTimeout(resolve, 5));
+
+      expect(events).toContain('request');
+      expect(events).toContain('response');
+    });
+  });
 });

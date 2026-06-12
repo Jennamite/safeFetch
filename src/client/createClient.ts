@@ -1,70 +1,70 @@
 import type { SafeFetchInstance, FetchOptions, RequestMethod } from '../types';
 
 function normalizePath(baseUrl: string, path: string): string {
-  // Удаляем завершающий слеш у baseUrl, если он есть
   const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-  // Удаляем начальный слеш у path, если он есть
   const p = path.startsWith('/') ? path : `/${path}`;
   return base + p;
 }
-
-/**
- * Создаёт прокси-клиент, который позволяет вызывать методы API в стиле:
- * client.users.get('/123')
- * client.users.post({ name: 'John' })
- * client.users.profile.get()
- *
- * @param instance - экземпляр safeFetch
- * @param baseUrl - базовый URL для всех запросов (опционально)
- */
 
 export function createClient<T extends Record<string, any>>(
   instance: SafeFetchInstance,
   baseUrl?: string
 ): T {
-  const methods: RequestMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+  const methods: string[] = ['get', 'post', 'put', 'patch', 'delete'];
 
   const buildPath = (path: string) => {
     if (!baseUrl) return path;
     return normalizePath(baseUrl, path);
   };
 
-  const client: any = {};
+  // 🔥 ИСПРАВЛЕНИЕ: Рекурсивная фабрика прокси, которая умеет накапливать сегменты пути
+  const createSubProxy = (parts: string[]): any => {
+    // Создаем функцию-заглушку, чтобы прокси оставался вызываемым (callable)
+    const targetFn = () => { };
 
-  const proxy = new Proxy(client, {
-    get(target, prop: string) {
-      if (target[prop]) return target[prop];
-
-      // Проверяем, является ли prop именем HTTP-метода (get, post, put, patch, delete)
-      const lowerProp = prop.toLowerCase();
-      for (const method of methods) {
-        if (lowerProp === method.toLowerCase()) {
-          return (path: string, data?: any, options?: Omit<FetchOptions, 'method' | 'body'>) => {
-            const fetchOptions: FetchOptions = { ...options, method };
-            if (data && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
-              fetchOptions.body = data;
-            }
-            return instance(buildPath(path), fetchOptions);
-          };
+    return new Proxy(targetFn, {
+      get(_, prop: string) {
+        // 🔥 ИСПРАВЛЕНИЕ: Игнорируем служебные свойства JS и символы.
+        // Это полностью защищает от поломки async/await (блокирует ложные запросы .then)
+        if (
+          typeof prop === 'symbol' ||
+          prop === 'then' ||
+          prop === 'constructor' ||
+          prop === 'prototype' ||
+          prop === 'inspect'
+        ) {
+          return undefined;
         }
-      }
 
-      // Иначе создаём вложенный прокси для поддержки client.users.profile.get()
-      return new Proxy(() => {}, {
-        get: (_, subProp: string) => {
-          return (path?: string, data?: any, options?: FetchOptions) => {
-            const fullPath = `/${prop}${path ? `/${path}` : ''}`;
-            const method = subProp.toUpperCase() as RequestMethod;
+        const lowerProp = prop.toLowerCase();
+
+        // Если вызван HTTP-метод, значит мы дошли до конца цепочки эндпоинта
+        if (methods.includes(lowerProp)) {
+          const method = prop.toUpperCase() as RequestMethod;
+
+          return (path?: string, data?: any, options?: Omit<FetchOptions, 'method' | 'body'>) => {
+            // Собираем все накопленные сегменты пути в единую строку
+            const basePath = '/' + parts.join('/');
+            // Добавляем хвостовой путь, если он передан в метод (например, .get('/123'))
+            const fullPath = `${basePath}${path ? (path.startsWith('/') ? path : `/${path}`) : ''}`;
+
             const fetchOptions: FetchOptions = { ...options, method };
-            if (data && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+
+            if (data !== undefined && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
               fetchOptions.body = data;
             }
+
             return instance(buildPath(fullPath), fetchOptions);
           };
-        },
-      });
-    },
-  });
+        }
 
-  return proxy as T;
+        // Если это не HTTP-метод, значит перед нами следующий сегмент пути API.
+        // Накапливаем его в массив и уходим на следующий уровень рекурсии прокси.
+        return createSubProxy([...parts, prop]);
+      }
+    });
+  };
+
+  // Корневой прокси начинает сборку с пустого массива сегментов
+  return createSubProxy([]) as T;
 }

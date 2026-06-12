@@ -51,19 +51,30 @@ export class Pipeline {
     }
 
     /**
-     * Выполняет цепочку middleware для контекста.
+     * Выполняет цепочку middleware для контекста по стандарту Koa.
      */
     async run(ctx: RequestContext): Promise<void> {
-        let index = -1;
-        const next = async (): Promise<void> => {
-            index++;
-            const middleware = this.middlewares[index];
+        // Фиксируем максимальный индекс, который был вызван, для защиты от "double next"
+        let lastCalledIndex = -1;
+
+        const dispatch = async (i: number): Promise<void> => {
+            // Если внутри одного middleware метод next() был вызван повторно
+            if (i <= lastCalledIndex) {
+                throw new Error('next() called multiple times in the same middleware');
+            }
+
+            lastCalledIndex = i;
+            const middleware = this.middlewares[i];
+
             if (middleware) {
-                console.log(`Pipeline: calling middleware #${index}`);
-                await middleware(ctx, next);
+                console.log(`Pipeline: calling middleware #${i}`);
+                // Передаем функцию next, которая жестко привязана к СЛЕДУЮЩЕМУ индексу (i + 1)
+                await middleware(ctx, () => dispatch(i + 1));
             }
         };
-        await next();
+
+        // Запускаем с нулевого индекса
+        await dispatch(0);
     }
 
     /**

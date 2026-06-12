@@ -1,10 +1,26 @@
 import type { SafeFetchInstance } from '../types';
 
 /**
- * Интерфейс плагина.
+ * Интерфейс плагина для safeFetch.
  * Плагин может расширять экземпляр safeFetch, добавляя middleware, настройки или методы.
  */
 export interface Plugin<TOptions = any> {
-  name: string;
-  setup: (instance: SafeFetchInstance, options?: TOptions) => void | Promise<void>;
+  /**
+   * Уникальное имя плагина (используется для логирования и предотвращения дублирования)
+   */
+  readonly name: string;
+
+  /**
+   * Метод инициализации плагина.
+   * 🔥 ИСПРАВЛЕНИЕ: Метод обязан быть строго синхронным (`void`), так как он вызывается 
+   * внутри синхронной цепочки методов SafeFetch. Выполнение асинхронных операций здесь 
+   * привело бы к race condition, когда запросы улетают до того, как плагин успел применить настройки.
+   */
+  setup(instance: SafeFetchInstance, options?: TOptions): void;
+
+  /**
+   * Дополнительный опциональный хук для асинхронных задач,
+   * если плагину нужно выполнить отложенную инициализацию (например, прогреть кэш).
+   */
+  onInit?(instance: SafeFetchInstance): Promise<void>;
 }

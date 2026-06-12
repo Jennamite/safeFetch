@@ -1,27 +1,26 @@
 # 🚀 safe-fetch
 
-> Type‑safe, расширяемый HTTP‑клиент с кэшированием, батчингом, повторными попытками и middleware.
+> Легковесный, расширяемый и отказоустойчивый HTTP‑клиент на базе нативного Fetch с Onion-архитектурой middleware, встроенным SWR-кэшированием, дедупликацией, автоматическими повторами и RPC-батчингом.
 
-[![npm version](https://img.shields.io/npm/v/safe-fetch.svg)](https://www.npmjs.com/package/safe-fetch)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![npm version](https://shields.io)](https://npmjs.com)
+[![License: MIT](https://shields.io)](https://opensource.org)
 
-`safe-fetch` — Меня достали взломы, я сделал альтернативу для своих нужд. Дальше посмотрим.
- Это альтернатива `axios` , `ky` и `ofetch` . Он предлагает встроенные механизмы для оптимизации запросов и полностью типизирован на typescript.
+`safe-fetch` спроектирован как бескомпромиссная, безопасная и ультра-производительная альтернатива `axios` , `ky` и `ofetch` для сложных высоконагруженных SPA/SSR приложений. Вместо простых линейных хуков библиотека использует **Onion-архитектуру пайплайнов (как в Koa.js)**, позволяя полностью контролировать жизненный цикл запроса в рамках одного middleware.
 
-## ✨ Особенности
+## ✨ Ключевые особенности
 
-* **Кэширование в памяти** с тегами и `stale-while-revalidate`
-* **Дедупликация** одновременных одинаковых запросов (GET/HEAD)
-* **Повторные попытки** (retry) с экспоненциальной задержкой
-* **Батчинг** POST‑запросов для уменьшения числа обращений к серверу
-* **Middleware** для перехвата и модификации запросов/ответов
-* **Хуки** (onRequest, onResponse, onError)
-* **Телеметрия** для мониторинга запросов
-* **Отмена запросов** через `AbortSignal` или встроенный `cancel()`
-* **Прогресс загрузки** (upload/download) через XHR
-* **Генерация REST‑клиента** (`createClient`)
-* **Плагины** для расширения функциональности
-* Полная поддержка **typescript** со строгой типизацией
+* 🛡️ **Onion Middleware**: Мощная сквозная обработка `await next()` вместо жестких раздельных интерцепторов.
+* 🧠 **Умный SWR-кэш**: Кэширование в памяти со стратегией *Stale-While-Revalidate* и гибкой инвалидацией по регулярным выражениям или тегам.
+* 👯 **Авто-дедупликация**: Схлопывание параллельных идентичных `GET/HEAD`‑запросов в один сетевой поток.
+* 📦 **RPC-Батчинг**: Автоматическое склеивание множества независимых `POST`‑запросов в один пакет для разгрузки сети.
+* ⏳ **Контроль конкурентности (Concurrency)**: Ограничение пула одновременных сетевых соединений по ключам.
+* 🔄 **Умные ретраи (Retry)**: Автоповторы при сбоях сети или 5xx ошибках с экспоненциальной задержкой, джиттером и аппаратной защитой от повторов при ручной отмене.
+* 🛑 **Надежный Abort**: Мгновенное прерывание пайплайна через `ctx.cancel()` или нативный `AbortSignal` без утечек памяти.
+* 📊 **Телеметрия и Хуки**: Сквозной мониторинг таймингов, событий кэша и ошибок из коробки.
+* 🗺️ **Генерация REST‑клиента**: Рекурсивный типобезопасный `Proxy`-клиент с поддержкой бесконечной вложенности роутов.
+* 🪶 **Строгая типизация**: Полная совместимость со строгим режимом TypeScript (`exactOptionalPropertyTypes: true`).
+
+---
 
 ## 📦 Установка
 
@@ -33,223 +32,241 @@ yarn add @jennamite/safe-fetch
 pnpm add @jennamite/safe-fetch
 ```
 
-## Node.js
+### Использование в Node.js (SSR / Next.js / Nuxt)
 
-В Node.js нет глобального fetch, поэтому передайте собственную реализацию (например, node-fetch):
-
-```bash
-npm install node-fetch
-```
+Библиотека использует нативный глобальный `fetch` . Если вы используете старые версии Node.js, где `fetch` отсутствует, прокиньте полифилл в дефолтные настройки:
 
 ```typescript
 import fetch from 'node-fetch';
 import { createSafeFetch } from '@jennamite/safe-fetch';
 
-const api = createSafeFetch({ fetch });
+const api = createSafeFetch({ fetch: fetch as any });
 ```
+
+---
 
 ## 🚀 Быстрый старт
 
 ```typescript
 import safeFetch from '@jennamite/safe-fetch';
 
-// GET
+// Базовый GET (автоматический парсинг JSON)
 const users = await safeFetch('/api/users');
 
-// POST с JSON
-const newUser = await safeFetch.post('/api/users', { name: 'John' });
+// POST-запрос с автоматической сериализацией и Content-Type
+const newUser = await safeFetch.post('/api/users', { name: 'John Doe' });
 
-// PUT, PATCH, DELETE
+// Другие HTTP-методы
 await safeFetch.put('/api/users/1', { name: 'Jane' });
 await safeFetch.patch('/api/users/1', { age: 30 });
 await safeFetch.del('/api/users/1');
 
-// Сырой Response
-const res = await safeFetch.raw('/api/file.pdf');
+// Получение сырого инстанса ответа Response
+const response = await safeFetch.raw('/api/file.pdf');
 ```
 
-## ⚙️ Настройка экземпляра
+## ⚙️ Настройка кастомного клиента
 
-Создайте собственный экземпляр с глобальными параметрами:
+Вы можете инициализировать изолированные клиенты со своими базовыми параметрами:
 
 ```typescript
 import { createSafeFetch } from '@jennamite/safe-fetch';
 
 const api = createSafeFetch({
-  baseUrl: 'https://api.example.com',
+  baseUrl: 'https://example.com',
   timeout: 5000,
-  retry: 2,
-  retryDelay: (attempt) => 1000 * attempt,
-  headers: { 'X-API-Key': 'secret' }
+  retry: 3,
+  retryDelay: (attempt) => attempt * 1000, // Линейная задержка
+  headers: { 
+    'X-API-Key': 'secret_token' 
+  }
 });
 ```
 
-## 📚 Основные возможности
+---
 
-Кэширование
+## 📚 Продвинутые возможности
+
+### 🧠 SWR-Кэширование и Инвалидация
+
+Стратегия `stale-while-revalidate` мгновенно возвращает устаревшие данные из памяти (если они есть) и прозрачно обновляет их на сервере в фоне.
 
 ```typescript
-// GET с кэшированием на 1 минуту
-const data = await api('/slow-data', {
+// Запрос кэшируется в памяти на 1 минуту
+const data = await api('/dashboard/stats', {
   cache: 'memory',
   cacheTTL: 60000,
-  tags: ['dashboard']
+  staleWhileRevalidate: true,
+  tags: ['analytics', 'charts']
 });
 
-// Инвалидация по тегам
-api.invalidate({ tags: ['dashboard'] });
-// или по паттерну URL
-api.invalidate(/dashboard/);
-// полная очистка кэша
-api.invalidate();
+// Гибкие методы инвалидации:
+api.invalidate({ tags: ['analytics'] });       // По тегу
+api.invalidate(/\/dashboard\/.*/);             // По регулярному выражению URL
+api.invalidate('stats');                       // По подстроке в URL
+api.invalidate();                              // Полный сброс кэша
 ```
 
-## Повторные попытки
+### 👯 Автоматическая дедупликация
+
+Включена по умолчанию для всех безопасных ( `GET/HEAD` ) методов. Предотвращает дублирование сетевых запросов, если они инициированы одновременно (например, при рендере нескольких независимых виджетов на одном экране).
 
 ```typescript
-await api('/unstable', {
+// Будет выполнен только ОДИН реальный сетевой запрос. Оба промиса получат общий результат.
+const [widgets, sidebar] = await Promise.all([
+  api('/api/config'),
+  api('/api/config')
+]);
+```
+
+### 📦 RPC-Батчинг запросов
+
+Позволяет склеивать независимые параллельные `POST` -запросы, отправленные в одном тике Event Loop, в один составной пакет для снижения нагрузки на сервер.
+
+```typescript
+// Сервер получит один POST-запрос с телом { batch: [{ url: '...', body: { id: 1 } }, ...] }
+// и должен вернуть массив результатов в аналогичном порядке.
+const [res1, res2] = await Promise.all([
+  api('/api/rpc', { method: 'POST', body: { id: 1 }, batch: true }),
+  api('/api/rpc', { method: 'POST', body: { id: 2 }, batch: true })
+]);
+```
+
+### 🛡️ Умные автоповторы (Retry)
+
+Автоповторы срабатывают исключительно при ошибках сети или серверных сбоях (5xx). Они снабжены экспоненциальной задержкой, джиттером (рандомизацией для предотвращения DDoS своего сервера) и **аппаратным глушением**, если запрос отменяется пользователем.
+
+```typescript
+await api('/unstable-endpoint', {
   retry: 3,
-  retryDelay: (attempt) => Math.min(1000 * Math.pow(2, attempt), 10000),
-  retryOn: (error) => error.status === 429 || error.status >= 500
+  retryDelay: (attempt) => Math.min(1000 * Math.pow(2, attempt), 15000), // Экспоненциальный бэкофф
 });
 ```
 
-## Дедупликация (включена по умолчанию)
+---
+
+## 🧅 Архитектура Middleware (Onion Pattern)
+
+Пайплайн построен по принципу матрешки (как в Koa.js). Вызов `await next()` передает управление нижестоящим слоям, после чего код возвращается обратно вверх по стеку.
 
 ```typescript
-// Оба вызова получат результат одного запроса
-const [a, b] = await Promise.all([
-  api('/users'),
-  api('/users')
-]);
-```
-
-## Батчинг POST‑запросов
-
-```typescript
-// Сервер должен вернуть массив результатов в том же порядке
-const [r1, r2] = await Promise.all([
-  api('/api/action', { method: 'POST', body: { id: 1 }, batch: true }),
-  api('/api/action', { method: 'POST', body: { id: 2 }, batch: true })
-]);
-```
-
-## Middleware
-
-```typescript
-// Логирование всех запросов
+// Слой сквозного логирования времени выполнения и ошибок
 api.use(async (ctx, next) => {
-  console.log(`→ ${ctx.options.method} ${ctx.url}`);
   const start = Date.now();
-  await next();
-  console.log(`← ${ctx.options.method} ${ctx.url} - ${Date.now() - start}ms`);
+  console.log(`→ Направлен запрос: ${ctx.options.method} ${ctx.url}`);
+  
+  try {
+    await next(); // Уходим глубже в конвейер
+    console.log(`← Успешный ответ за ${Date.now() - start}ms`);
+  } catch (err) {
+    console.error(`💥 Ошибка конвейера за ${Date.now() - start}ms: ${err.message}`);
+    throw err;
+  }
 });
 
-// Добавление заголовка авторизации
+// Слой динамической инъекции токенов авторизации (prepend добавляет в начало очереди)
 api.prepend(async (ctx, next) => {
-  ctx.options.headers = {
-    ...ctx.options.headers,
-    Authorization: `Bearer ${getToken()}`
-  };
+  const headers = new Headers(ctx.options.headers);
+  headers.set('Authorization', `Bearer ${authService.getAccessToken()}`);
+  ctx.options.headers = headers;
+  
   await next();
 });
 ```
 
-## Хуки
+---
+
+## 🪝 Хуки и Телеметрия
+
+Для простых операций подписки на события предусмотрены хуки и изолированный слой телеметрии, не влияющие на ход выполнения пайплайна.
 
 ```typescript
-api.onRequest((ctx) => {
-  console.log('Request started', ctx.url);
-});
+// Регистрация хуков жизненного цикла
+api.onRequest((ctx) => console.log('Инициализирован запрос:', ctx.url));
+api.onResponse((ctx) => console.log('Получен HTTP Статус:', ctx.response?.status));
+api.onError((ctx, error) => console.error('Зафиксирована ошибка:', error.message));
 
-api.onResponse((ctx) => {
-  console.log('Response status', ctx.response?.status);
-});
-
-api.onError((ctx, error) => {
-  console.error('Request failed', error.message);
+// Подписка на глобальную системную телеметрию инстанса
+api.onTelemetry((event) => {
+  if (event.type === 'response') {
+    console.log(`[Telemetry] Метрика ${event.ctx.url} заняла ${event.duration}ms`);
+  }
 });
 ```
 
-## Отмена запроса
+---
+
+## 🛑 Отмена запросов и Обработка ошибок
+
+Отменить запрос можно как с помощью нативного `AbortSignal` , так и через внутренний метод контекста `ctx.cancel()` . Ошибки гарантированно приводятся к классу `SafeFetchError` , сохраняя при этом вложенную JSON-структуру ответа сервера.
 
 ```typescript
-let cancel: () => void;
-api.onRequest((ctx) => { cancel = ctx.cancel; });
+// 1. Ручная отмена внутри хука или middleware
+api.onRequest((ctx) => {
+  if (isBlacklisted(ctx.url)) {
+    ctx.cancel('Доступ к эндпоинту заблокирован безопасностью');
+  }
+});
 
-const promise = api('/long-operation');
-setTimeout(() => cancel('User cancelled'), 100);
+// 2. Использование нативного AbortController
+const controller = new AbortController();
+const promise = api('/heavy-reporting', { signal: controller.signal });
+
+setTimeout(() => controller.abort(), 500);
 
 try {
   await promise;
 } catch (err) {
-  if (err.isAbort) console.log('Request was cancelled');
+  if (err instanceof SafeFetchError) {
+    console.log('HTTP Статус:', err.status);         // e.g. 400
+    console.log('Это отмена запроса?:', err.isAbort); // true
+    console.log('Ошибка ретраится?:', err.isRetryable); // false
+    console.log('Тело JSON ошибки:', err.body);        // Распарсенный объект ошибки от сервера
+  }
 }
 ```
 
-## Прогресс загрузки (только браузер)
+---
 
-```typescript
-await api('/upload', {
-  method: 'POST',
-  body: file,
-  onUploadProgress: (p) => console.log(`Upload: ${p * 100}%`),
-  onDownloadProgress: (p) => console.log(`Download: ${p * 100}%`)
-});
-```
+## 🗺️ Рекурсивный REST‑клиент ( `createClient` )
 
-## Генерация REST‑клиента
+Утилита генерирует динамический `Proxy` -клиент, поддерживающий **бесконечную вложенность эндпоинтов**. Он полностью совместим с `async/await` и корректно изолирован от служебных вызовов JavaScript.
 
 ```typescript
 import { createClient } from '@jennamite/safe-fetch';
 
-const client = createClient<{
-  users: {
-    get: (id?: string) => Promise<User>;
-    post: (data: User) => Promise<User>;
-  };
-  posts: {
-    get: (id?: string) => Promise<Post>;
-  };
-}>('https://api.example.com');
-
-const user = await client.users.get('123');
-const newPost = await client.posts.post({ title: 'Hello' });
-```
-
-## Плагины
-
-```typescript
-const loggerPlugin = {
-  name: 'logger',
-  setup(instance) {
-    instance.use(async (ctx, next) => {
-      console.log(`${ctx.options.method} ${ctx.url}`);
-      await next();
-    });
+interface MyApiSchema {
+  api: {
+    v1: {
+      users: {
+        get: (path?: string) => Promise<User[]>;
+        profile: {
+          get: () => Promise<UserProfile>;
+          patch: (data: Partial<UserProfile>) => Promise<UserProfile>;
+        }
+      }
+    }
   }
-};
+}
 
-api.plugin(loggerPlugin);
+const client = createClient<MyApiSchema>(safeFetch, 'https://api.example.com');
+
+// Автоматически соберет URL: https://example.com
+const allUsers = await client.api.v1.users.get();
+
+// Автоматически соберет URL: https://example.com/profile
+const profile = await client.api.v1.users.profile.get();
 ```
 
-## Телеметрия
-
-```typescript
-api.onTelemetry((event) => {
-  if (event.type === 'response') {
-    console.log(`Request ${event.ctx.url} took ${event.duration}ms`);
-  } else if (event.type === 'error') {
-    console.error(`Error in ${event.duration}ms`, event.error);
-  }
-});
-```
+---
 
 ## 🛠️ API
 
-* **`createSafeFetch(defaultOptions?)`** – создаёт новый экземпляр `safeFetch` с глобальными настройками.
-  
-* **`safeFetch(url, options?)`** – выполняет запрос, возвращает `Promise<T>` или `Promise<FetchResult<T>>` (при `returnMeta: true`).
+* **`createSafeFetch(defaultOptions?)`** – Создаёт новый изолированный экземпляр `safeFetch` с глобальными настройками по умолчанию.
+* **`safeFetch(url, options?)`** – Основной callable-экземпляр по умолчанию. Выполняет запрос, возвращает `Promise<T>` (или `Promise<FetchResult<T>>` при выставленном флаге `returnMeta: true`).
+* **`api.use(...middlewares)`** / **`api.prepend(...middlewares)`** – Регистрация пользовательских слоев в Onion-конвейер.
+* **`api.invalidate(patternOrOptions)`** – Ручной сброс SWR-кэша по тегам, строке или регулярному выражению.
+* **`api.revalidate(pattern, options)`** – Принудительный фоновый перезапрос и обновление данных в кэше.
 
 ## 📖 Основные опции
 
@@ -276,7 +293,7 @@ api.onTelemetry((event) => {
 ### Примечания
 
 * При использовании `onUploadProgress` или `onDownloadProgress` запрос автоматически выполняется через `XMLHttpRequest` вместо `fetch`.
-* Для работы кэша и дедупликации по умолчанию учитываются заголовки `authorization`,    `accept-language`,    `x-api-key`. Это можно изменить глобально через `includeHeaders` при создании экземпляра.
+* Для работы кэша и дедупликации по умолчанию учитываются заголовки `authorization`,      `accept-language`,      `x-api-key`. Это можно изменить глобально через `includeHeaders` при создании экземпляра.
 * `staleWhileRevalidate` при включённом `cache: 'memory'` возвращает устаревшие данные и одновременно обновляет кэш в фоне.
 * Батчинг требует, чтобы сервер умел обрабатывать составные запросы и возвращал массив результатов в том же порядке, что и исходные запросы.
 

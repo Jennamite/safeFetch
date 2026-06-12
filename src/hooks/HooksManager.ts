@@ -1,4 +1,4 @@
-import type { Middleware, RequestContext, OnRequestHook, OnResponseHook, OnErrorHook } from '../types';
+import type { Middleware, OnRequestHook, OnResponseHook, OnErrorHook } from '../types';
 import { SafeFetchError } from '../errors';
 
 export class HooksManager {
@@ -22,18 +22,41 @@ export class HooksManager {
   }
 
   /**
-   * Создаёт массив middleware, которые будут вызывать хуки в нужные моменты.
-   * Возвращает три middleware: до запроса, после запроса (при успехе) и при ошибке.
+   * Создаёт массив middleware с правильным порядком выполнения Onion-архитектуры.
    */
   createMiddleware(): Middleware[] {
-    const before: Middleware = async (ctx, next) => {
+    // Перехватчик ошибок должен стоять на самом внешнем уровне (вверху),
+    // чтобы контролировать абсолютно весь внутренний процесс пайплайна
+    const errorMiddleware: Middleware = async (ctx, next) => {
+      try {
+        await next();
+      } catch (err) {
+        // Извлекаем ошибку: либо готовую из контекста, либо текущую, бережно приводя к SafeFetchError
+        const safeError = ctx.error ||
+          (err instanceof SafeFetchError || (err && (err as any).name === 'SafeFetchError')
+            ? (err as any)
+            : new SafeFetchError((err as Error)?.message || 'Unknown error'));
+
+        // Передаем ошибку в контекст, если она там отсутствовала
+        if (!ctx.error) {
+          ctx.error = safeError;
+        }
+
+        for (const hook of this.errorHooks) {
+          await hook(ctx, safeError);
+        }
+        throw err;
+      }
+    };
+
+    const beforeMiddleware: Middleware = async (ctx, next) => {
       for (const hook of this.requestHooks) {
         await hook(ctx);
       }
       await next();
     };
 
-    const after: Middleware = async (ctx, next) => {
+    const afterMiddleware: Middleware = async (ctx, next) => {
       await next();
       if (!ctx.error) {
         for (const hook of this.responseHooks) {
@@ -42,19 +65,9 @@ export class HooksManager {
       }
     };
 
-    const error: Middleware = async (ctx, next) => {
-      try {
-        await next();
-      } catch (err) {
-        const safeError = err instanceof SafeFetchError ? err : new SafeFetchError((err as Error).message);
-        for (const hook of this.errorHooks) {
-          await hook(ctx, safeError);
-        }
-        throw err;
-      }
-    };
-
-    return [before, after, error];
+    // 🔥 ИСПРАВЛЕНИЕ: Изменяем порядок возврата! 
+    // errorMiddleware оборачивает before и after, гарантируя 100% перехват
+    return [errorMiddleware, beforeMiddleware, afterMiddleware];
   }
 
   private removeHook(list: any[], hook: any): void {

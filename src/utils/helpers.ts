@@ -7,20 +7,30 @@ export function generateRequestId(): string {
 
 /**
  * Стабильная сериализация объектов для построения ключей.
- * Рекурсивно обходит объекты, сортирует ключи.
+ * Рекурсивно обходит объекты, сортирует ключи и защищена от циклических ссылок.
  */
-export function stableStringify(obj: any): string {
+export function stableStringify(obj: any, seen = new WeakSet()): string {
   if (obj === undefined) return 'undefined';
   if (obj === null) return 'null';
   if (obj instanceof Date) return obj.toISOString();
-  if (Array.isArray(obj)) {
-    return `[${obj.map(stableStringify).join(',')}]`;
+
+  // 🔥 ИСПРАВЛЕНИЕ: Защита от бесконечной рекурсии при циклических ссылках
+  if (typeof obj === 'object') {
+    if (seen.has(obj)) return '[Circular]';
+    seen.add(obj);
   }
+
+  if (Array.isArray(obj)) {
+    return `[${obj.map(item => stableStringify(item, seen)).join(',')}]`;
+  }
+
   if (typeof obj === 'object') {
     const keys = Object.keys(obj).sort();
-    return `{${keys.map(k => `${k}:${stableStringify(obj[k])}`).join(',')}}`;
+    return `{${keys.map(k => `${k}:${stableStringify(obj[k], seen)}`).join(',')}}`;
   }
-  return JSON.stringify(obj);
+
+  // 🔥 ИСПРАВЛЕНИЕ: Оптимизация размера ключей для примитивов (избавляемся от лишних кавычек JSON)
+  return String(obj);
 }
 
 /**
@@ -30,31 +40,51 @@ export function isSafeMethod(method?: string): boolean {
   return method === 'GET' || method === 'HEAD';
 }
 
-export function filterUndefinedDeep<T>(obj: T): T {
+/**
+ * Рекурсивно очищает объект от undefined, полностью вычищая пустые поддеревья.
+ */
+/**
+ * Рекурсивно очищает объект от undefined, полностью вычищая пустые поддеревья.
+ */
+export function filterUndefinedDeep(obj: any, seen = new WeakSet()): any {
   if (Array.isArray(obj)) {
     return obj
-      .map(filterUndefinedDeep)
-      .filter(item => item !== undefined) as any;
+      .map(item => filterUndefinedDeep(item, seen))
+      .filter(item => item !== undefined);
   }
 
   if (obj && typeof obj === 'object') {
+    // Защита от циклов
+    if (seen.has(obj)) return obj;
+    seen.add(obj);
+
     const result: any = {};
+    let hasKeys = false;
+
     for (const [key, value] of Object.entries(obj)) {
       if (value === undefined) continue;
-      const filtered = filterUndefinedDeep(value);
-      if (filtered !== undefined) {
+
+      const filtered = filterUndefinedDeep(value, seen);
+
+      // Если вложенный объект после очистки стал абсолютно пустым {},
+      // мы НЕ добавляем его в родительский объект, чтобы гарантировать совпадение ключей кэша
+      if (filtered !== undefined && (typeof filtered !== 'object' || filtered === null || Object.keys(filtered).length > 0 || Array.isArray(filtered))) {
         result[key] = filtered;
+        hasKeys = true;
       }
     }
-    return result;
+
+    // Если весь объект целиком стал пустым — возвращаем undefined для очистки родительской ветки
+    return hasKeys ? result : undefined;
   }
 
   return obj;
 }
 
+
 /**
  * Глубокое слияние заголовков.
- * @param target - целевой объект заголовков (будет изменён)
+ * @param target - целевой объект заголовков
  * @param source - источник заголовков
  * @returns объединённый объект Headers
  */

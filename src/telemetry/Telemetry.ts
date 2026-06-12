@@ -22,22 +22,25 @@ export class Telemetry {
   }
 
   /**
-   * Отправляет событие всем слушателям.
-   * Слушатели вызываются асинхронно без ожидания (fire-and-forget).
+   * Отправляет событие всем слушателям асинхронно (fire-and-forget).
    */
   emit(event: TelemetryEvent): void {
     for (const listener of this.listeners) {
-      try {
-        const result = listener(event);
-        // Если слушатель асинхронный, не ждём его завершения
-        if (result && typeof result.catch === 'function') {
-          result.catch(() => {
-            // Игнорируем ошибки в слушателях телеметрии
-          });
+      // 🔥 ИСПРАВЛЕНИЕ: Выносим запуск слушателей в макротаск (setTimeout), 
+      // чтобы операции телеметрии гарантированно не блокировали основной Event Loop
+      // выполнения сетевых запросов и не приводили к утечкам при зависании.
+      setTimeout(() => {
+        try {
+          const result = listener(event);
+          if (result && typeof result.catch === 'function') {
+            result.catch(() => {
+              // Игнорируем внутренние ошибки слушателей
+            });
+          }
+        } catch {
+          // Игнорируем синхронные ошибки слушателей
         }
-      } catch {
-        // Игнорируем ошибки в слушателях телеметрии
-      }
+      }, 0);
     }
   }
 }

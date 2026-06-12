@@ -1,1 +1,0 @@
-export { pollingMiddleware } from './PollingMiddleware';

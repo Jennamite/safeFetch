@@ -1,6 +1,6 @@
-import type { CacheEntrySerialized } from '../types';
+import type { CacheEntrySerialized, FetchOptions } from '../types';
 
-export interface CacheEntry {
+interface CacheEntry {
   data: any;
   requestId: string;
   headers: Headers;
@@ -8,6 +8,8 @@ export interface CacheEntry {
   statusText: string;
   expires: number;
   tags: string[];
+  originalUrl: string;
+  originalOptions: FetchOptions;
 }
 
 export class MemoryCache {
@@ -27,21 +29,42 @@ export class MemoryCache {
 
   set(key: string, entry: Omit<CacheEntry, 'expires'> & { ttl: number }) {
     const expires = Date.now() + entry.ttl;
-    const fullEntry: CacheEntry = { ...entry, expires };
+    const fullEntry: CacheEntry = {
+      data: entry.data,
+      requestId: entry.requestId,
+      headers: entry.headers,
+      status: entry.status,
+      statusText: entry.statusText,
+      expires,
+      tags: entry.tags,
+      originalUrl: entry.originalUrl,
+      originalOptions: entry.originalOptions,
+    };
+
+    // 🔥 ИСПРАВЛЕНИЕ: Реально сохраняем данные в Map!
     this.cache.set(key, fullEntry);
+
+    // Обновляем порядок ключей для алгоритма LRU (выталкивание старых данных)
     this.keysOrder = this.keysOrder.filter(k => k !== key);
     this.keysOrder.push(key);
+
+    // 🔥 ИСПРАВЛЕНИЕ: Контролируем лимит размера при каждой записи
     this.enforceMaxSize();
+
+    // Оповещаем подписчиков
     this.emit('set', key, fullEntry);
   }
 
   get(key: string, ignoreExpiry = false): CacheEntry | undefined {
     const entry = this.cache.get(key);
     if (!entry) return undefined;
+
     if (!ignoreExpiry && entry.expires < Date.now()) {
       this.delete(key);
       return undefined;
     }
+
+    // Элемент обновился по частоте использования, двигаем в конец очереди
     this.keysOrder = this.keysOrder.filter(k => k !== key);
     this.keysOrder.push(key);
     return entry;
@@ -49,24 +72,34 @@ export class MemoryCache {
 
   delete(key: string) {
     const entry = this.cache.get(key);
+    if (!entry) return; // Защита от холостых вызовов
+
     this.cache.delete(key);
     this.keysOrder = this.keysOrder.filter(k => k !== key);
+
     this.emit('delete', key, entry);
     this.emit('invalidate', key, entry);
   }
 
   invalidateByTags(tags: string[]) {
-    for (const [key, entry] of this.cache.entries()) {
-      if (entry.tags.some(t => tags.includes(t))) this.delete(key);
+    // Делаем копию ключей перед итерацией, чтобы избежать багов изменения Map во время цикла
+    const keys = Array.from(this.cache.keys());
+    for (const key of keys) {
+      const entry = this.cache.get(key);
+      if (entry && entry.tags.some(t => tags.includes(t))) {
+        this.delete(key);
+      }
     }
   }
 
   invalidateByPattern(pattern: string | RegExp | ((key: string) => boolean), method?: string) {
-    for (const [key] of this.cache.entries()) {
+    const keys = Array.from(this.cache.keys());
+    for (const key of keys) {
       let match = false;
       if (typeof pattern === 'function') match = pattern(key);
       else if (pattern instanceof RegExp) match = pattern.test(key);
       else match = key.includes(pattern);
+
       if (method && !key.startsWith(`${method.toUpperCase()}:`)) match = false;
       if (match) this.delete(key);
     }
@@ -93,6 +126,8 @@ export class MemoryCache {
         statusText: entry.statusText,
         expires: entry.expires,
         tags: entry.tags,
+        originalUrl: entry.originalUrl,
+        originalOptions: entry.originalOptions,
       };
     }
     return result;
@@ -104,7 +139,17 @@ export class MemoryCache {
     this.keysOrder = [];
     for (const [key, entry] of entries) {
       const headers = new Headers(entry.headers);
-      this.cache.set(key, { ...entry, headers });
+      this.cache.set(key, {
+        data: entry.data,
+        requestId: entry.requestId,
+        headers,
+        status: entry.status,
+        statusText: entry.statusText,
+        expires: entry.expires,
+        tags: entry.tags,
+        originalUrl: entry.originalUrl,
+        originalOptions: entry.originalOptions,
+      });
       this.keysOrder.push(key);
     }
   }
@@ -118,11 +163,21 @@ export class MemoryCache {
   private enforceMaxSize() {
     while (this.keysOrder.length > this.maxSize) {
       const oldest = this.keysOrder.shift();
-      if (oldest) this.cache.delete(oldest);
+      if (oldest) {
+        // Вызываем напрямую cache.delete, чтобы избежать лишней фильтрации массива keysOrder внутри this.delete
+        const entry = this.cache.get(oldest);
+        this.cache.delete(oldest);
+        this.emit('delete', oldest, entry);
+        this.emit('invalidate', oldest, entry);
+      }
     }
   }
 
   private emit(event: string, key: string, entry?: CacheEntry) {
     this.listeners.get(event)?.forEach(fn => fn(key, entry));
+  }
+
+  getEntry(key: string): CacheEntry | undefined {
+    return this.cache.get(key);
   }
 }

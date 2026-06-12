@@ -25,10 +25,26 @@ export class RequestContextImpl implements RequestContext {
       startTime: Date.now(),
       retryCount: 0,
     };
+
     this.controller = new AbortController();
+
+    // Стрелочная функция для сохранения контекста `this` при вызове из хуков
     this.cancel = (reason?: string) => {
       if (!this.controller.signal.aborted) {
-        this.controller.abort(new SafeFetchError(reason || 'Request cancelled', { isAbort: true }));
+        const message = reason || 'Request cancelled';
+
+        // 🔥 ИСПРАВЛЕНИЕ: Создаем полноценную ошибку отмены
+        const abortError = new SafeFetchError(message, {
+          isAbort: true,
+          request: this.request,
+        });
+
+        // Записываем её в свойство error контекста. 
+        // Теперь ResponseMiddleware и другие слои мгновенно увидят, что запрос отменен!
+        this.error = abortError;
+
+        // Передаем ошибку в нативный AbortController
+        this.controller.abort(abortError);
       }
     };
   }

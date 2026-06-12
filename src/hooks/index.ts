@@ -1,1 +1,0 @@
-export { HooksManager } from './HooksManager';

@@ -1,6 +1,5 @@
 import type { Middleware } from '../types';
 import type { SafeFetch } from './SafeFetch';
-import { retryMiddleware } from '../retry/RetryMiddleware';
 import { timeoutMiddleware } from '../timeout/TimeoutMiddleware';
 import { concurrencyMiddleware } from '../concurrency/ConcurrencyMiddleware';
 import { queryMiddleware } from '../query/QueryMiddleware';
@@ -15,18 +14,27 @@ import { pollingMiddleware } from '../polling/PollingMiddleware';
 
 export function defaultMiddleware(instance: SafeFetch): Middleware[] {
   return [
-    // retryMiddleware() - УДАЛИТЬ
-    timeoutMiddleware(),
+    // 1. Сквозные глобальные обертки (Должны гарантированно перехватывать все ошибки и успехи сверху вниз)
+    telemetryMiddleware(instance.telemetry),
+    pollingMiddleware(instance),
+    mutationInvalidationMiddleware(instance.cache),
     concurrencyMiddleware(instance.concurrencyController),
+
+    // 2. Инфраструктурные слои подготовки данных (Таймауты вешаются до сборки тела)
+    timeoutMiddleware(),
     queryMiddleware(),
     bodyMiddleware(),
+
+    // 3. Оптимизационные слои (Дедупликация должна стоять ВЫШЕ кэша, чтобы перехватывать параллельные запросы)
     dedupeMiddleware(instance.dedupeManager),
     batchMiddleware(instance.batchProcessor, instance),
     cacheMiddleware(instance.cache, instance),
-    fetchMiddleware(),
+
+    // 4. Слой обработки ответов (Парсит JSON/текст ошибок и валидирует статус-коды)
+    // Обязан стоять ВЫШЕ исполнителя запросов, чтобы обернуть его в свой try/catch!
     responseMiddleware(),
-    telemetryMiddleware(instance.telemetry),
-    mutationInvalidationMiddleware(instance.cache),
-    pollingMiddleware(instance),
+
+    // 5. Исполнитель (Конечная точка пайплайна, дальше которой прохода по цепочке next() нет)
+    fetchMiddleware(),
   ];
 }

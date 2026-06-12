@@ -1,4 +1,4 @@
-import type { Middleware, RequestContext } from '../types';
+import type { Middleware } from '../types';
 import { ConcurrencyController } from './ConcurrencyController';
 import { buildCacheKey } from '../utils/keyBuilder';
 
@@ -11,21 +11,36 @@ export function concurrencyMiddleware(controller: ConcurrencyController): Middle
     }
 
     const max = concurrency.max;
-    const key = concurrency.key ?? buildCacheKey({
-      url: ctx.url,
-      method: ctx.options.method ?? 'GET',
-      query: ctx.options.query,
-      body: ctx.options.body,
-      headers: ctx.options.headers,
-      includeHeaders: ctx.options.includeHeaders,
-    });
 
-    // Используем сигнал из контекста для возможности прерывания ожидания
-    await controller.acquire(key, max, ctx.controller.signal);
+    // 🔥 ИСПРАВЛЕНИЕ: Безопасное формирование объекта для exactOptionalPropertyTypes
+    let key = concurrency.key;
+
+    if (!key) {
+      const buildOptions: any = {
+        url: ctx.url,
+        method: ctx.options.method ?? 'GET',
+      };
+
+      if (ctx.options.query !== undefined) buildOptions.query = ctx.options.query;
+      if (ctx.options.body !== undefined) buildOptions.body = ctx.options.body;
+      if (ctx.options.headers !== undefined) buildOptions.headers = ctx.options.headers;
+      if (ctx.options.includeHeaders !== undefined) buildOptions.includeHeaders = ctx.options.includeHeaders;
+
+      key = buildCacheKey(buildOptions);
+    }
+
+    let token: any;
+
     try {
+      // Захватываем слот конкурентности и сохраняем уникальный защитный токен
+      token = await controller.acquire(key, max, ctx.controller.signal);
+
+      // 🔥 ИСПРАВЛЕНИЕ: Вызываем next() строго один раз в рамках безопасной сессии слота!
       await next();
     } finally {
-      controller.release(key);
+      // Передаем токен в метод release, чтобы контроллер мог отличить 
+      // отмену запроса в очереди от отмены уже активного запроса
+      controller.release(key, token);
     }
   };
 }

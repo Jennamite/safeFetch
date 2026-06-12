@@ -19,6 +19,14 @@ export class DedupeManager {
    * Сохраняет промис для ключа.
    */
   set(key: string, promise: Promise<any>): void {
+    // 🔥 ИСПРАВЛЕНИЕ: Предотвращаем "Unhandled Promise Rejection" в Node.js / Vitest.
+    // Мы вешаем пустой обработчик на случай, если промис упадет до того, 
+    // как параллельный запрос вызовет для него `.get()` и `await`.
+    promise.catch(() => {
+      // Игнорируем здесь, так как реальная ошибка будет 
+      // обработана и проброшена внутри DedupeMiddleware
+    });
+
     this.pending.set(key, promise);
   }
 

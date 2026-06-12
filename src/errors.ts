@@ -1,27 +1,30 @@
 export class SafeFetchError extends Error {
-  public readonly status?: number;
-  public readonly statusText?: string;
-  public readonly response?: Response;
-  public readonly body?: any;
-  public readonly request?: Request;
-  public readonly isAbort?: boolean;
-  public readonly isRetryable?: boolean;
+  public readonly status: number | undefined;
+  public readonly statusText: string | undefined;
+  public readonly response: Response | undefined;
+  public readonly body: any;
+  public readonly request: Request | undefined;
+  public readonly isAbort: boolean;
+  public readonly isRetryable: boolean;
 
   constructor(
     message: string,
     options: {
-      status?: number;
-      statusText?: string;
-      response?: Response;
-      body?: any;
-      request?: Request;
-      isAbort?: boolean;
-      isRetryable?: boolean;
+      // 🔥 Исправление: добавляем `| undefined` к свойствам аргумента
+      status?: number | undefined;
+      statusText?: string | undefined;
+      response?: Response | undefined;
+      body?: any; // any уже покрывает undefined
+      request?: Request | undefined;
+      isAbort?: boolean | undefined;
+      isRetryable?: boolean | undefined;
     } = {}
   ) {
     super(message);
 
     Object.setPrototypeOf(this, SafeFetchError.prototype);
+
+    this.name = 'SafeFetchError';
 
     Object.defineProperty(this, 'message', {
       configurable: true,
@@ -30,14 +33,17 @@ export class SafeFetchError extends Error {
       writable: true
     });
 
-    this.name = 'SafeFetchError';
+    this.status = options.status;
+    this.statusText = options.statusText;
+    this.response = options.response;
+    this.body = options.body;
+    this.request = options.request;
+    
+    this.isAbort = options.isAbort ?? false;
+    this.isRetryable = options.isRetryable ?? false;
 
-    if (options.status !== undefined) this.status = options.status;
-    if (options.statusText !== undefined) this.statusText = options.statusText;
-    if (options.response !== undefined) this.response = options.response;
-    if (options.body !== undefined) this.body = options.body;
-    if (options.request !== undefined) this.request = options.request;
-    if (options.isAbort !== undefined) this.isAbort = options.isAbort;
-    if (options.isRetryable !== undefined) this.isRetryable = options.isRetryable;
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
   }
 }

@@ -21,32 +21,43 @@ export class BatchProcessor {
   }
 
   async add(key: string, ctx: RequestContext, instance: SafeFetch): Promise<any> {
-    if (this.flushing.has(key)) {
-      return new Promise((resolve, reject) => {
-        const list = this.pending.get(key) || [];
-        const item: BatchRequest = { ctx, resolve, reject };
-        // ... обработка отмены (как в существующем коде)
-        list.push(item);
-        this.pending.set(key, list);
-        // таймер не запускаем, так как flush уже выполняется
-      });
-    }
-    return new Promise((resolve, reject) => {
-      const list = this.pending.get(key) || [];
-      const item: BatchRequest = { ctx, resolve, reject };
-
+    // Вспомогательная функция для настройки AbortSignal на элементе очереди
+    const setupAbort = (item: BatchRequest, reject: (reason?: any) => void) => {
       if (ctx.controller.signal.aborted) {
-        reject(new SafeFetchError('Request cancelled', { isAbort: true }));
-        return;
+        reject(new SafeFetchError('Request cancelled', { isAbort: true, request: ctx.request }));
+        return false;
       }
 
       const onAbort = () => {
         this.removeFromQueue(key, item);
-        reject(new SafeFetchError('Request cancelled', { isAbort: true }));
+        reject(new SafeFetchError('Request cancelled', { isAbort: true, request: ctx.request }));
       };
+
       ctx.controller.signal.addEventListener('abort', onAbort, { once: true });
       item.signal = ctx.controller.signal;
       item.cleanup = () => ctx.controller.signal.removeEventListener('abort', onAbort);
+      return true;
+    };
+
+    if (this.flushing.has(key)) {
+      return new Promise((resolve, reject) => {
+        const list = this.pending.get(key) || [];
+        const item: BatchRequest = { ctx, resolve, reject };
+
+        // 🔥 ИСПРАВЛЕНИЕ: Добавлена полноценная обработка отмены для фазы flushing
+        if (!setupAbort(item, reject)) return;
+
+        list.push(item);
+        this.pending.set(key, list);
+      });
+    }
+
+    return new Promise((resolve, reject) => {
+      const list = this.pending.get(key) || [];
+      const item: BatchRequest = { ctx, resolve, reject };
+
+      // Настраиваем прерывание по сигналу отмены
+      if (!setupAbort(item, reject)) return;
 
       list.push(item);
       this.pending.set(key, list);
@@ -73,17 +84,30 @@ export class BatchProcessor {
     for (const [key, requests] of batches) {
       if (requests.length === 0) continue;
 
+      // Помечаем ключ батча как находящийся в процессе отправки
+      this.flushing.add(key);
+
       const first = requests[0]!;
       const { url, options } = first.ctx;
       const { batchKey, batchMaxWaitMs, ...batchOptions } = options;
 
       const batchBody = {
-        batch: requests.map(r => ({
-          url: r.ctx.url,
-          method: r.ctx.options.method ?? 'GET',
-          headers: r.ctx.options.headers,
-          body: r.ctx.options.body,
-        })),
+        batch: requests.map(r => {
+          // 🔥 ИСПРАВЛЕНИЕ: Сериализация Headers, если они представлены инстансом класса Headers
+          let serializedHeaders: any = r.ctx.options.headers;
+          if (serializedHeaders instanceof Headers) {
+            const obj: Record<string, string> = {};
+            serializedHeaders.forEach((value, k) => { obj[k] = value; });
+            serializedHeaders = obj;
+          }
+
+          return {
+            url: r.ctx.url,
+            method: r.ctx.options.method ?? 'GET',
+            headers: serializedHeaders,
+            body: r.ctx.options.body,
+          };
+        }),
       };
 
       const mergedBatchOptions: FetchOptions = {
@@ -99,19 +123,15 @@ export class BatchProcessor {
 
       try {
         const response = await instance.request(url, mergedBatchOptions);
-        console.log('Batch response type:', typeof response);
-        console.log('Batch response value:', response);
 
         let parsedResponse = response;
         if (typeof parsedResponse === 'string') {
-          console.log('Response is string, attempting JSON.parse');
           try {
             parsedResponse = JSON.parse(parsedResponse);
-          } catch (e) {
-            console.log('JSON.parse failed');
+          } catch {
+            // Оставляем как текст
           }
         }
-        console.log('parsedResponse:', parsedResponse);
 
         let dataArray: any[];
         if (Array.isArray(parsedResponse)) {
@@ -130,23 +150,28 @@ export class BatchProcessor {
 
         for (let i = 0; i < requests.length; i++) {
           const req = requests[i]!;
+
+          // 🔥 ИСПРАВЛЕНИЕ: Сначала снимаем обработчик, чтобы предотвратить гонку утечек
+          if (req.cleanup) req.cleanup();
+
           if (req.signal?.aborted) {
-            req.reject(new SafeFetchError('Request cancelled', { isAbort: true }));
+            req.reject(new SafeFetchError('Request cancelled', { isAbort: true, request: req.ctx.request }));
           } else {
             req.resolve(dataArray[i]);
           }
-          if (req.cleanup) req.cleanup();
         }
       } catch (err) {
         for (const req of requests) {
+          // 🔥 ИСПРАВЛЕНИЕ: Гарантированная очистка слушателей при падении
           if (req.cleanup) req.cleanup();
           req.reject(err);
         }
+      } finally {
+        // Фаза сброса для данного ключа завершена
+        this.flushing.delete(key);
       }
     }
 
-    // Если во время отправки батчей появились новые запросы (например, добавленные через add),
-    // планируем следующий flush, чтобы они не потерялись
     if (this.pending.size > 0) {
       this.scheduleFlush(instance);
     }

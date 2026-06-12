@@ -1,1 +1,0 @@
-export { fetchMiddleware } from './FetchMiddleware';

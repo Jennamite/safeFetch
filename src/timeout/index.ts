@@ -1,1 +1,0 @@
-export { timeoutMiddleware } from './TimeoutMiddleware';

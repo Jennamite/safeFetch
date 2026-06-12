@@ -3,7 +3,14 @@ import { SafeFetchError } from '../errors';
 
 export function responseMiddleware(): Middleware {
   return async (ctx, next) => {
-    await next();
+    try {
+      await next();
+    } catch (err) {
+      if (err instanceof SafeFetchError || (err && (err as any).name === 'SafeFetchError')) {
+        ctx.error = err as any;
+      }
+      throw err;
+    }
 
     console.log('responseMiddleware: ctx.response.status', ctx.response?.status);
     console.log('responseMiddleware: ctx.data before parse', ctx.data);
@@ -20,76 +27,74 @@ export function responseMiddleware(): Middleware {
     if (raw) return;
 
     if (!ctx.response) {
-      throw new SafeFetchError('No response received');
+      throw new SafeFetchError('No response received', {
+        request: ctx.request
+      });
     }
 
     const response = ctx.response;
     const signal = ctx.controller?.signal;
 
-    // ✅ helper
     const throwIfAborted = () => {
       if (signal?.aborted) {
-throw new SafeFetchError('Request aborted', {
-  isAbort: true,
-  ...(ctx.request ? { request: ctx.request } : {}),
-});
+        throw new SafeFetchError('Request aborted', {
+          isAbort: true,
+          request: ctx.request,
+        });
       }
     };
 
-    // ✅ FIX #1 — перед любыми async действиями
     throwIfAborted();
 
     if (!validateStatus(response.status)) {
-      let errorBody: any;
+      let errorBody = '';
+      let errorMessage = `HTTP ${response.status}: ${response.statusText || 'Error'}`;
 
       try {
         const cloned = response.clone();
         errorBody = await cloned.text();
+
+        if (errorBody) {
+          try {
+            const parsed = JSON.parse(errorBody);
+            if (parsed && typeof parsed === 'object') {
+              const nestedError = parsed.error;
+              errorMessage = parsed.message ||
+                (typeof nestedError === 'object' && nestedError !== null ? nestedError.message : null) ||
+                parsed.error ||
+                errorMessage;
+            }
+          } catch {
+            // Тело не JSON
+          }
+        }
       } catch {
         errorBody = 'Unable to read error body';
       }
 
-      throwIfAborted(); // ✅ FIX
+      throwIfAborted();
 
-      const errorOptions: {
-        status?: number;
-        statusText?: string;
-        response?: Response;
-        body?: any;
-        request?: Request;
-        isAbort?: boolean;
-      } = {
+      throw new SafeFetchError(errorMessage, {
         status: response.status,
-        statusText: response.statusText,
+        statusText: response.statusText || undefined,
         response,
         body: errorBody,
-      };
-
-      Object.keys(errorOptions).forEach(key => {
-        if (errorOptions[key as keyof typeof errorOptions] === undefined) {
-          delete errorOptions[key as keyof typeof errorOptions];
-        }
+        request: ctx.request,
+        isRetryable: response.status >= 500,
       });
-
-      throw new SafeFetchError(`HTTP ${response.status}: ${response.statusText}`, errorOptions);
     }
 
     if (ctx.data === undefined) {
       try {
-        throwIfAborted(); // ✅ FIX перед parse
-
         ctx.data = await parseBody(response, parse);
-
-        throwIfAborted(); // ✅ FIX после parse
-      } catch (err: any) {
-        // ✅ если во время парсинга произошёл abort
-        if (signal?.aborted) {
-throw new SafeFetchError('Request aborted', {
-  isAbort: true,
-  ...(ctx.request ? { request: ctx.request } : {}),
-});
-        }
-        throw err;
+      } catch (parseErr) {
+        throw new SafeFetchError('Failed to parse response body', {
+          status: response.status,
+          statusText: response.statusText || undefined,
+          response,
+          request: ctx.request,
+          isRetryable: false,
+        });
       }
     }
 
@@ -134,6 +139,8 @@ async function parseBody(response: Response, parse: FetchOptions['parse']): Prom
   }
 
   const text = await response.text();
+
+  if (!text) return '';
 
   if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
     try {

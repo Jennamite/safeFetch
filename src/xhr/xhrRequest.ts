@@ -31,7 +31,6 @@ export function xhrRequest<T = any>({
 
     xhr.open(method, url, true);
 
-    // Установка withCredentials
     if (credentials === 'include' || credentials === 'same-origin') {
       xhr.withCredentials = true;
     } else {
@@ -44,13 +43,22 @@ export function xhrRequest<T = any>({
 
     if (options.timeout) xhr.timeout = options.timeout;
 
+    // 🔥 ИСПРАВЛЕНИЕ: Инкапсулируем логику отмены и очистки
+    let onAbort: (() => void) | null = null;
+
+    const cleanupSignalListener = () => {
+      if (signal && onAbort) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
+
     if (signal) {
       if (signal.aborted) {
         reject(new SafeFetchError('Request cancelled', { isAbort: true }));
         return;
       }
-      const onAbort = () => {
-        xhr.abort();
+      onAbort = () => {
+        try { xhr.abort(); } catch { /* ignore */ }
         reject(new SafeFetchError('Request cancelled', { isAbort: true }));
       };
       signal.addEventListener('abort', onAbort, { once: true });
@@ -68,7 +76,10 @@ export function xhrRequest<T = any>({
       });
     }
 
-    xhr.onload = () => {
+    // Делаем колбэк асинхронным для поддержки await в кастомных функциях парсинга
+    xhr.onload = async () => {
+      cleanupSignalListener(); // 🔥 Гарантированно вычищаем слушатель при успехе
+
       const responseHeaders = new Headers();
       const allHeaders = xhr.getAllResponseHeaders();
       if (allHeaders) {
@@ -103,7 +114,8 @@ export function xhrRequest<T = any>({
             statusText,
             headers: responseHeaders,
           });
-          data = parseMode(tempResponse);
+          // 🔥 ИСПРАВЛЕНИЕ: Разрешаем кастомный парсер асинхронно через await
+          data = await parseMode(tempResponse);
         } else {
           const contentType = responseHeaders.get('content-type') || '';
           if (contentType.includes('application/json')) {
@@ -125,16 +137,20 @@ export function xhrRequest<T = any>({
             status,
             statusText,
             body: errorBody,
+            isRetryable: status >= 500,
           })
         );
       }
     };
 
     xhr.onerror = () => {
-      reject(new SafeFetchError('Network Error'));
+      cleanupSignalListener(); // 🔥 Вычищаем слушатель при ошибке сети
+      // 🔥 ИСПРАВЛЕНИЕ: Сетевые ошибки XHR теперь ретраятся (isRetryable: true)
+      reject(new SafeFetchError('Network Error', { isRetryable: true }));
     };
 
     xhr.ontimeout = () => {
+      cleanupSignalListener(); // 🔥 Вычищаем слушатель при таймауте
       reject(new SafeFetchError('Request timeout', { isAbort: true }));
     };
 
@@ -142,6 +158,7 @@ export function xhrRequest<T = any>({
     const body = options.body;
     if (body !== null && body !== undefined) {
       if (body instanceof ReadableStream) {
+        cleanupSignalListener();
         reject(new SafeFetchError('ReadableStream body is not supported in XHR'));
         return;
       }

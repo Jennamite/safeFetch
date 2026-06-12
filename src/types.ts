@@ -182,4 +182,7 @@ export interface CacheEntrySerialized {
   statusText: string;
   expires: number;
   tags: string[];
+  // ✅ Добавляем новые поля
+  originalUrl: string;
+  originalOptions: any; // или Partial<FetchOptions>
 }
