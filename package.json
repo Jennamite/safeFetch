@@ -1,6 +1,6 @@
 {
   "name": "@jennamite/safe-fetch",
-  "version": "1.0.7",
+  "version": "2.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Jennamite/safeFetch.git"
