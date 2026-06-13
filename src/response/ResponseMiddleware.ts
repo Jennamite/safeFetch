@@ -17,7 +17,7 @@ export function responseMiddleware(): Middleware {
 
     // 🔥 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Если на нижнем уровне (в FetchMiddleware) 
     // уже была зафиксирована ошибка с кастомным текстом бэкенда, 
-    // мы МГНОВЕННО выходим и не даем коду ниже создать дефолтную ошибку HTTP 400!
+    // мы МГНОВЕННО выходим и не даем коду ниже перезаписать её дефолтной строкой!
     if (ctx.error) return;
 
     const {
@@ -49,8 +49,10 @@ export function responseMiddleware(): Middleware {
 
     throwIfAborted();
 
+    // Эта проверка сработает только если FetchMiddleware почему-то пропустил плохой статус
     if (!validateStatus(response.status)) {
       let errorBody = '';
+      let parsedObj: any = null;
       let errorMessage = `HTTP ${response.status}: ${response.statusText || 'Error'}`;
 
       try {
@@ -60,15 +62,35 @@ export function responseMiddleware(): Middleware {
         if (errorBody) {
           try {
             const parsed = JSON.parse(errorBody);
-            if (parsed && typeof parsed === 'object') {
-              const nestedError = parsed.error;
-              errorMessage = parsed.message ||
-                (typeof nestedError === 'object' && nestedError !== null ? nestedError.message : null) ||
-                parsed.error ||
-                errorMessage;
+            if (parsed) {
+              parsedObj = parsed;
+
+              // 1. Если бэк вернул массив ошибок (часто бывает при валидации форм)
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                const firstErr = parsed[0];
+                errorMessage = firstErr?.message || firstErr?.error || errorMessage;
+              }
+              // 2. Если бэк вернул классический объект
+              else if (typeof parsed === 'object') {
+                const nestedError = parsed.error;
+
+                // Зеркально сканируем все популярные ключи ошибок в индустрии по приоритету
+                const possibleMessage =
+                  parsed.message ||
+                  (typeof nestedError === 'object' && nestedError !== null ? nestedError.message : null) ||
+                  parsed.detail ||              // Для Python/FastAPI
+                  parsed.error_description ||   // Стандарт OAuth2
+                  (typeof parsed.error === 'string' ? parsed.error : null) ||
+                  parsed.err;                   // Для Go
+
+                // Безопасное приведение к строке (включая массивы строк из NestJS/Fastify)
+                if (possibleMessage) {
+                  errorMessage = Array.isArray(possibleMessage) ? possibleMessage.join(', ') : String(possibleMessage);
+                }
+              }
             }
           } catch {
-            // Тело не JSON
+            // Тело не JSON (оставляем дефолтный errorMessage, текст запишется в errorBody)
           }
         }
       } catch {
@@ -81,12 +103,13 @@ export function responseMiddleware(): Middleware {
         status: response.status,
         statusText: response.statusText || undefined,
         response,
-        body: errorBody,
+        body: parsedObj && typeof parsedObj === 'object' ? parsedObj : errorBody, // Передаем объект, если это был JSON
         request: ctx.request,
         isRetryable: response.status >= 500,
       });
     }
 
+    // Парсим успешное тело, если оно ещё не распарсено
     if (ctx.data === undefined) {
       try {
         ctx.data = await parseBody(response, parse);
