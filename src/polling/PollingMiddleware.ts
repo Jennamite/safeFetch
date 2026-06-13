@@ -23,7 +23,6 @@ export function pollingMiddleware(instance: SafeFetch): Middleware {
       if (ctx.controller.signal.aborted) return;
 
       try {
-        // 🔥 ИСПРАВЛЕНИЕ: Вырезаем pollInterval через деструктуризацию.
         // Переменная _poll содержит старое значение, а в optionsWithoutPoll
         // свойства pollInterval вообще не будет (оно не будет равно undefined, его там просто нет).
         // Это идеально подходит под правило exactOptionalPropertyTypes.
