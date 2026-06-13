@@ -15,6 +15,9 @@ export function responseMiddleware(): Middleware {
     console.log('responseMiddleware: ctx.response.status', ctx.response?.status);
     console.log('responseMiddleware: ctx.data before parse', ctx.data);
 
+    // 🔥 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Если на нижнем уровне (в FetchMiddleware) 
+    // уже была зафиксирована ошибка с кастомным текстом бэкенда, 
+    // мы МГНОВЕННО выходим и не даем коду ниже создать дефолтную ошибку HTTP 400!
     if (ctx.error) return;
 
     const {

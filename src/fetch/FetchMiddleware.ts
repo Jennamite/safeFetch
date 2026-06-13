@@ -1,13 +1,15 @@
 import type { Middleware, FetchOptions } from '../types';
 import { SafeFetchError } from '../errors';
-import { combineSignals, abortedPromise } from '../utils/signals'; // 🔥 Импортируем abortedPromise
+import { combineSignals, abortedPromise } from '../utils/signals';
 import { xhrRequest } from '../xhr/xhrRequest';
 import { fetchAdapter } from '../utils/fetchAdapter';
 
 export function fetchMiddleware(): Middleware {
   return async (ctx, next) => {
     if (ctx.controller.signal.aborted) {
-      throw new SafeFetchError('Request aborted', { isAbort: true });
+      throw new SafeFetchError('Request aborted', {
+        isAbort: true,
+      });
     }
 
     if (ctx.response) {
@@ -47,7 +49,10 @@ export function fetchMiddleware(): Middleware {
 
     const throwIfAborted = () => {
       if (finalSignal?.aborted || ctx.controller.signal.aborted) {
-        throw new SafeFetchError('Request aborted', { isAbort: true, request });
+        throw new SafeFetchError('Request aborted', {
+          isAbort: true,
+          request,
+        });
       }
     };
 
@@ -55,8 +60,13 @@ export function fetchMiddleware(): Middleware {
       let response: Response;
 
       if (useXHR) {
-        // ... (код XHR оставляем без изменений)
-        const xhrOptions: any = { url: ctx.url, method: method!, options: ctx.options, requestId };
+        const xhrOptions: any = {
+          url: ctx.url,
+          method: method!,
+          options: ctx.options,
+          requestId,
+        };
+
         if (finalSignal) xhrOptions.signal = finalSignal;
         if (onDownloadProgress) xhrOptions.onDownloadProgress = onDownloadProgress;
         if (onUploadProgress) xhrOptions.onUploadProgress = onUploadProgress;
@@ -70,31 +80,30 @@ export function fetchMiddleware(): Middleware {
           statusText: xhrResult.statusText,
           headers: xhrResult.headers,
         });
+
         ctx.data = xhrResult.data;
         ctx.response = response;
 
         const isValid = validateStatus?.(response.status) ?? (response.status >= 200 && response.status < 300);
         if (!isValid) {
+          const errorBody = typeof xhrResult.data === 'string' ? xhrResult.data : JSON.stringify(xhrResult.data);
           throw new SafeFetchError(`HTTP ${response.status}: ${response.statusText}`, {
             status: response.status,
             statusText: response.statusText,
             response,
-            body: typeof xhrResult.data === 'string' ? xhrResult.data : JSON.stringify(xhrResult.data),
+            body: errorBody,
             request,
             isRetryable: response.status >= 500,
           });
         }
+
         await next();
         throwIfAborted();
         return;
       } else {
         const fetcher = customFetch ?? fetchAdapter;
-
-        // Отправляем запрос в сеть (или в мок)
         response = await fetcher(ctx.url, requestInit);
 
-        // 🔥 ИСПРАВЛЕНИЕ: Если за время выполнения запроса (даже за 10мс) 
-        // сработал триггер отмены, мы мгновенно прерываем выполнение и выбрасываем 'User cancelled'
         throwIfAborted();
 
         ctx.response = response;
@@ -113,6 +122,7 @@ export function fetchMiddleware(): Middleware {
         if (!statusValid) {
           let errorBodyString = '';
           let errorBodyFinal: any = '';
+          // Базовый дженерик на случай, если бэк вообще ничего не прислал
           let errorMessage = `HTTP ${response.status}: ${response.statusText || 'Bad Request'}`;
 
           try {
@@ -123,15 +133,38 @@ export function fetchMiddleware(): Middleware {
             if (errorBodyString) {
               try {
                 const parsed = JSON.parse(errorBodyString);
-                if (parsed && typeof parsed === 'object') {
+                if (parsed) {
                   errorBodyFinal = parsed;
-                  const nestedError = parsed.error;
-                  errorMessage = parsed.message ||
-                    (typeof nestedError === 'object' && nestedError !== null ? nestedError.message : null) ||
-                    parsed.error ||
-                    errorMessage;
+
+                  // 1. Если бэк вернул массив ошибок (часто бывает при валидации форм)
+                  if (Array.isArray(parsed) && parsed.length > 0) {
+                    const firstErr = parsed[0];
+                    errorMessage = firstErr?.message || firstErr?.error || errorMessage;
+                  }
+                  // 2. Если бэк вернул классический объект
+                  else if (typeof parsed === 'object') {
+                    const nestedError = parsed.error;
+
+                    // Сканируем все популярные ключи ошибок в индустрии по приоритету
+                    const possibleMessage =
+                      parsed.message ||
+                      (typeof nestedError === 'object' && nestedError !== null ? nestedError.message : null) ||
+                      parsed.detail ||
+                      parsed.error_description ||
+                      (typeof parsed.error === 'string' ? parsed.error : null) ||
+                      parsed.err;
+
+                    // Если нашли хоть какой-то вменяемый текст, берем его. 
+                    // Если это массив (например, в NestJS parsed.message бывает массивом), берем его первый элемент
+                    if (possibleMessage) {
+                      errorMessage = Array.isArray(possibleMessage) ? possibleMessage[0] : String(possibleMessage);
+                    }
+                  }
                 }
-              } catch { /* ignore */ }
+              } catch {
+                // Тело не JSON (например, plain text) — errorMessage остается дефолтным, 
+                // но сам текст сохранится в errorBodyFinal и будет доступен через err.body
+              }
             }
           } catch {
             errorBodyFinal = 'Unable to read error response body';
@@ -150,23 +183,11 @@ export function fetchMiddleware(): Middleware {
         await next();
         return;
       }
-
-
     } catch (err) {
-      // 🔥 ИСПРАВЛЕНИЕ: Если в контексте или сигнале уже зафиксирована ошибка отмены пользователем,
-      // мы берем именно её, сохраняя оригинальное сообщение ('User cancelled')
-      if (ctx.controller.signal.aborted) {
-        const reason = ctx.controller.signal.reason;
-        if (reason instanceof SafeFetchError || (reason && reason.name === 'SafeFetchError')) {
-          throw reason;
-        }
-        throw new SafeFetchError(typeof reason === 'string' ? reason : 'Request aborted', {
-          isAbort: true,
-          request
-        });
-      }
+      throwIfAborted();
 
-      // Если ошибка уже является экземпляром SafeFetchError, просто пробрасываем её выше
+      // 🔥 ИСПРАВЛЕНИЕ: Если это уже готовая SafeFetchError с текстом от бэкенда, 
+      // просто пробрасываем её наверх, не оборачивая заново в дефолтный "Fetch error"!
       if (err instanceof SafeFetchError || (err && (err as any).name === 'SafeFetchError')) {
         throw err;
       }
@@ -185,6 +206,5 @@ export function fetchMiddleware(): Middleware {
     } finally {
       cleanup?.();
     }
-
   };
 }
